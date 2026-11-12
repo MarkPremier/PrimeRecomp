@@ -1,11 +1,14 @@
-"""Extract the installed Prime Target volume (an HFS disk image) to a host folder.
+"""Extract Prime Target from its CD (BIN/CUE or ISO) or an installed HFS disk image.
 
 Each Mac file becomes:
     <name>        data fork (always written, may be empty)
     <name>.rsrc   resource fork (only when non-empty)
 and every folder gets a finder.json mapping file name -> {type, creator, flags}.
 
-Usage: python tools/extract_game.py <image.hfv|.iso> <out_dir>
+Usage: python tools/extract_game.py <PrimeTarget.cue | .iso | .hfv> <out_dir>
+
+From the CD only the 'Prime Target' and 'Movies' folders are copied (the rest
+is demos and the installer).
 """
 import json
 import os
@@ -15,8 +18,25 @@ import sys
 import machfs
 
 
+def read_data_track(path):
+    """Raw bytes of the image, or of the CUE's first (data) track as 2048-byte sectors."""
+    if not path.lower().endswith('.cue'):
+        return open(path, 'rb').read()
+    sys.path.insert(0, os.path.dirname(__file__))
+    from rip_cd_audio import parse_cue
+    binfile, tracks = parse_cue(path)
+    mode = next((l.split()[2] for l in open(path, encoding='latin-1') if l.strip().startswith('TRACK 01')), '')
+    raw = open(binfile, 'rb').read()
+    end = tracks[1]['start'] * 2352 if len(tracks) > 1 else len(raw)
+    if mode == 'MODE1/2048':
+        return raw[:end]
+    if mode != 'MODE1/2352':
+        raise SystemExit(f'unsupported data track mode {mode!r}')
+    return b''.join(raw[o + 16:o + 16 + 2048] for o in range(0, end, 2352))
+
+
 def load_volume(path):
-    data = open(path, 'rb').read()
+    data = read_data_track(path)
     if data[:2] == b'ER':  # Apple partition map (CD images): pick the HFS partition
         blk = struct.unpack('>H', data[2:4])[0]
         i = 1
@@ -72,7 +92,17 @@ def extract(folder, out):
                 fh.write(host_name(name) + '\t' + name.encode('mac_roman').hex() + '\n')
 
 
+def extract_volume(src, dst):
+    vol = load_volume(src)
+    if 'Prime Target Installer' in vol:   # the CD: keep just the game
+        keep = {k: vol[k] for k in ('Prime Target', 'Movies')}
+        vol = machfs.Folder()
+        for k, v in keep.items():
+            vol[k] = v
+    extract(vol, dst)
+
+
 if __name__ == '__main__':
     src, dst = sys.argv[1], sys.argv[2]
-    extract(load_volume(src), dst)
+    extract_volume(src, dst)
     print('extracted', src, '->', dst)

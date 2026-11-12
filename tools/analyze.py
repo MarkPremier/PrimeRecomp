@@ -1,15 +1,22 @@
-"""Instantiate the Prime Target PEF, find functions, and write the image description.
+"""Instantiate the Prime Target PEF, find every function, and write the image description.
 
 Outputs (in <out_dir>):
     code.bin, data.bin   relocated section contents
     image.json           layout, imports, entry points, functions
 
-Function boundaries come from the AIX-style traceback tables CodeWarrior emits
-after every function: a zero word, then the table, whose optional tb_offset
-field gives the distance back to the function's first instruction.
+Game functions come from one of two places:
+  * the AIX-style traceback tables CodeWarrior emits after every function
+    (v1.1 keeps them: a zero word, then the table, whose tb_offset field gives
+    the distance back to the function's first instruction), or
+  * a symbol file (symbols/*.tsv, made by make_symbols.py) for builds without
+    tables, such as v1.2 on the CD.
+The CodeWarrior runtime library after the game code has neither; its entry
+points come from call targets and TVectors. The C++ exception index at the
+very end of the code section is data.
 
-Usage: python tools/analyze.py <PEF data fork> <out_dir>
+Usage: python tools/analyze.py <PEF data fork> <out_dir> [--symbols <file.tsv>]
 """
+import hashlib
 import json
 import os
 import struct
@@ -34,6 +41,8 @@ def parse_traceback(code, pos):
     has_ctl = bool(f1 & 0x08)
     floatparms = f5 >> 1
     p = t + 8
+    if p + 16 > len(code):
+        return None
     info = {
         'lang': lang, 'saves_lr': bool(f2 & 0x01), 'saves_cr': bool(f2 & 0x02),
         'fpr_saved': f3 & 0x3F, 'gpr_saved': f4 & 0x3F,
@@ -71,7 +80,10 @@ def find_functions(code):
         # a zero word is a candidate table; real tables chain end-to-end, so the
         # function it describes must start at or after the previous table's end
         if code[pos:pos + 4] == b'\0\0\0\0':
-            tb = parse_traceback(code, pos)
+            try:
+                tb = parse_traceback(code, pos)
+            except (struct.error, UnicodeDecodeError):
+                tb = None
             if tb and 'tb_offset' in tb and tb['end'] <= len(code):
                 start = pos - tb['tb_offset']
                 if prev_end <= start < pos and start % 4 == 0:
@@ -83,41 +95,138 @@ def find_functions(code):
     return funcs
 
 
+def exception_index_start(code):
+    """CodeWarrior's exception index: (function offset, 0x80000000|length, info) triples at the end."""
+    pos = len(code) - 12
+    while pos >= 0:
+        off, ln, _ = struct.unpack_from('>III', code, pos)
+        if not (off < len(code) and off % 4 == 0 and ln & 0x80000000 and not ln & 0x7FF00000):
+            break
+        pos -= 12
+    return pos + 12
+
+
+def read_symbols(path, blob):
+    funcs, runtime = [], None
+    for line in open(path, encoding='utf-8'):
+        line = line.rstrip('\n')
+        if line.startswith('# sha1 '):
+            want = line.split()[2]
+            if hashlib.sha1(blob).hexdigest() != want:
+                raise SystemExit(f'{path} is for a different build (sha1 {want})')
+        elif line.startswith('# runtime '):
+            runtime = int(line.split()[2], 16)
+        elif line and not line.startswith('#'):
+            start, end, name = line.split('\t')[:3]
+            funcs.append({'start': int(start, 16), 'end': int(end, 16), 'name': name})
+    if runtime is None:
+        raise SystemExit(f'{path}: no "# runtime" line')
+    return funcs, runtime
+
+
+def branch_target(w, pc):
+    op = w >> 26
+    if op == 18:
+        li = w & 0x03FFFFFC
+        if li & 0x02000000:
+            li -= 0x04000000
+        return (li if w & 2 else pc + li) & 0xFFFFFFFF
+    if op == 16:
+        bd = w & 0xFFFC
+        if bd & 0x8000:
+            bd -= 0x10000
+        return (bd if w & 2 else pc + bd) & 0xFFFFFFFF
+    return None
+
+
+def discover_runtime(word, named, lo, hi, seeds):
+    """Entry points in [lo, hi): calls from game code and seeds, then calls inside, until stable."""
+    entries = set(seeds)
+    for f in named:
+        for pc in range(f['start'], f['end'], 4):
+            w = word(pc)
+            if w >> 26 in (16, 18) and w & 1:
+                entries.add(branch_target(w, pc))
+    changed = True
+    while changed:
+        changed = False
+        inside = sorted(t for t in entries if lo <= t < hi)
+        for i, s in enumerate(inside):
+            e = inside[i + 1] if i + 1 < len(inside) else hi
+            for pc in range(s, e, 4):
+                w = word(pc)
+                if w >> 26 in (16, 18) and w & 1:
+                    t = branch_target(w, pc)
+                    if t not in entries and lo <= t < hi and t != pc + 4:
+                        entries.add(t)
+                        changed = True
+    inside = sorted(t for t in entries if lo <= t < hi)
+    return [(s, inside[i + 1] if i + 1 < len(inside) else hi) for i, s in enumerate(inside)]
+
+
 def main():
-    src, out = sys.argv[1], sys.argv[2]
+    args = sys.argv[1:]
+    symbols = None
+    if '--symbols' in args:
+        k = args.index('--symbols')
+        symbols = args[k + 1]
+        del args[k:k + 2]
+    src, out = args
     os.makedirs(out, exist_ok=True)
-    p = peflib.PEF(open(src, 'rb').read())
+    blob = open(src, 'rb').read()
+    p = peflib.PEF(blob)
     p.instantiate()
     code_s, data_s = p.sections[0], p.sections[1]
     code, data = bytes(code_s.data), bytes(data_s.data)
-
-    funcs = find_functions(code)
-    # sanity: functions must not overlap and should tile the code section
-    gaps = []
-    prev_end = 0
-    for f in funcs:
-        if f['start'] < prev_end:
-            raise SystemExit(f"overlapping functions at {f['start']:#x}")
-        if f['start'] > prev_end:
-            gaps.append((prev_end, f['start']))
-        prev_end = f['tb_end']
-    if prev_end < len(code):
-        gaps.append((prev_end, len(code)))
+    cb, db = code_s.base, data_s.base
 
     main_tv = p.main_tvector
-    mo = main_tv - data_s.base
+    mo = main_tv - db
     main_code, main_toc = struct.unpack('>II', data[mo:mo + 8])
+    code_pointers = [[p.sections[sec].base + off, struct.unpack('>I', p.sections[sec].data[off:off + 4])[0]]
+                     for sec, off, delta in p.reloc_sites if delta == cb]
+
+    # game functions
+    if symbols:
+        named, runtime_start = read_symbols(symbols, blob)
+        source = os.path.basename(symbols)
+    else:
+        tb = find_functions(code)
+        if not tb:
+            raise SystemExit('no traceback tables in this build; pass --symbols symbols/<build>.tsv')
+        named = [{'start': cb + f['start'], 'end': cb + f['body_end'], 'name': f['name'].lstrip('.')}
+                 for f in tb]
+        runtime_start = cb + tb[-1]['tb_end']
+        source = 'traceback tables'
+    for a, b in zip(named, named[1:]):
+        if a['end'] > b['start']:
+            raise SystemExit(f"overlapping functions at {b['start']:#x}")
+
+    # runtime library: from the end of game code up to the exception index
+    exc = cb + exception_index_start(code)
+    word = lambda a: struct.unpack_from('>I', code, a - cb)[0]
+    seeds = {main_code}
+    for addr, val in code_pointers:
+        o = addr - db
+        if 0 <= o and o + 8 <= len(data) and struct.unpack_from('>I', data, o + 4)[0] == main_toc:
+            seeds.add(val)
+    runtime = discover_runtime(word, named, runtime_start, exc, seeds)
+
+    functions = []
+    if named[0]['start'] > cb:   # glue ahead of the first game function
+        functions.append({'start': cb, 'end': named[0]['start'], 'name': None})
+    functions += named
+    functions += [{'start': s, 'end': e, 'name': None} for s, e in runtime]
+    functions.sort(key=lambda f: f['start'])
 
     # relocation sanity: count words that look like guest pointers
     def classify(v):
-        if code_s.base <= v < code_s.base + code_s.total:
+        if cb <= v < cb + code_s.total:
             return 'code'
-        if data_s.base <= v < data_s.base + data_s.total:
+        if db <= v < db + data_s.total:
             return 'data'
         if peflib.IMPORT_TVEC_BASE <= v < peflib.IMPORT_TVEC_BASE + 8 * len(p.imports):
             return 'import'
-        if 0x02000000 <= v < 0x04000000:
-            return 'suspicious'  # base added twice?
         return None
     kinds = {}
     for i in range(0, len(data) - 3, 4):
@@ -129,8 +238,10 @@ def main():
     open(os.path.join(out, 'data.bin'), 'wb').write(data)
     image = {
         'source': os.path.abspath(src),
-        'code_base': code_s.base, 'code_size': code_s.total,
-        'data_base': data_s.base, 'data_size': data_s.total, 'data_init_size': data_s.unpacked,
+        'app_name': os.path.basename(src),
+        'sha1': hashlib.sha1(blob).hexdigest(),
+        'code_base': cb, 'code_size': code_s.total,
+        'data_base': db, 'data_size': data_s.total, 'data_init_size': data_s.unpacked,
         'main_tvector': main_tv, 'main_code': main_code, 'toc': main_toc,
         'init_tvector': p.symbol_address(p.init_section, p.init_offset),
         'term_tvector': p.symbol_address(p.term_section, p.term_offset),
@@ -140,29 +251,21 @@ def main():
         'imports': [{'index': i.index, 'library': i.library, 'name': i.name,
                      'class': i.class_name, 'weak': i.weak, 'address': i.address,
                      'code_address': i.code_address} for i in p.imports],
-        'functions': [{'start': code_s.base + f['start'], 'end': code_s.base + f['body_end'],
-                       'name': f.get('name'), 'saves_lr': f['saves_lr'],
-                       'fixedparms': f['fixedparms'], 'floatparms': f['floatparms']}
-                      for f in funcs],
-        'gaps': [[code_s.base + a, code_s.base + b] for a, b in gaps],
+        'runtime_start': runtime_start,
+        'exception_index': exc,
+        'functions': functions,
         # words relocated by the code section base: [guest address of word, value]
-        'code_pointers': [[p.sections[sec].base + off,
-                           struct.unpack('>I', p.sections[sec].data[off:off + 4])[0]]
-                          for sec, off, delta in p.reloc_sites if delta == code_s.base],
+        'code_pointers': code_pointers,
     }
     json.dump(image, open(os.path.join(out, 'image.json'), 'w'), indent=1)
 
-    print(f'code {code_s.base:#x}+{code_s.total:#x}  data {data_s.base:#x}+{data_s.total:#x} '
+    print(f'code {cb:#x}+{code_s.total:#x}  data {db:#x}+{data_s.total:#x} '
           f'(initialized {data_s.unpacked:#x})')
     print(f'main tvector {main_tv:#x} -> code {main_code:#x}, toc {main_toc:#x}')
-    print(f'init {image["init_tvector"]}, term {image["term_tvector"]}')
-    print(f'imports {len(p.imports)}; classes', {c: sum(1 for i in p.imports if i.class_name == c)
-                                                 for c in set(i.class_name for i in p.imports)})
-    print(f'functions {len(funcs)} (named {sum(1 for f in funcs if f.get("name"))}); '
-          f'gaps {len(gaps)} totalling {sum(b - a for a, b in gaps)} bytes')
+    print(f'imports {len(p.imports)}')
+    print(f'functions {len(functions)}: {len(named)} game ({source}), {len(runtime)} runtime library '
+          f'[{runtime_start:#x}, {exc:#x})')
     print('pointer-like words in data:', kinds)
-    mf = [f for f in funcs if code_s.base + f['start'] == main_code]
-    print('main function:', mf[0].get('name') if mf else 'NOT AT A FUNCTION START')
 
 
 if __name__ == '__main__':

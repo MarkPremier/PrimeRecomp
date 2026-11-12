@@ -16,6 +16,7 @@
 #include <map>
 #include <sstream>
 
+#include "image_info.h"
 #include "pt/runtime.h"
 
 namespace pt::vfs {
@@ -200,7 +201,7 @@ void init() {
     g_app_vref = -1;
     g_app_dir = dir_id(-1, game / "Prime Target");
     const char *app = getenv("PT_APP_NAME");
-    g_app_name = app && *app ? utf8_to_mac(app) : "Prime Target v11";
+    g_app_name = app && *app ? utf8_to_mac(app) : utf8_to_mac(PT_IMAGE_APP_NAME);
     logf(LOG_FILE, "vfs: game volume %s, user volume %s\n", game.u8string().c_str(), user.u8string().c_str());
 }
 

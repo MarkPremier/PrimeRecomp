@@ -284,6 +284,8 @@ HLE(HNoPurge) { handle_set_state(ARG(0), handle_get_state(ARG(0)) & ~0x40); set_
 HLE(HGetState) { RET((int8_t)handle_get_state(ARG(0))); set_mem_err(c, 0); }
 HLE(HSetState) { handle_set_state(ARG(0), (uint8_t)ARG(1)); set_mem_err(c, 0); }
 HLE(MoveHHi) { set_mem_err(c, 0); }
+/* MoveHHi + HLock; blocks never move here, so it is just a lock (used by v1.2) */
+HLE(HLockHi) { handle_set_state(ARG(0), handle_get_state(ARG(0)) | 0x80); set_mem_err(c, 0); }
 HLE(MaxApplZone) {}
 HLE(MoreMasters) {}
 HLE(MemError) { RET((int16_t)g_mem_err); }

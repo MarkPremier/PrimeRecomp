@@ -6,16 +6,19 @@ translated to C ahead of time and runs against a reimplementation of the
 classic Mac Toolbox. No emulator and no Apple ROM; system fonts and cursors
 come from your own Mac OS disk image, copied into `system/` once.
 
-Target binary: **Prime Target v1.1** (`Prime Target v11`), because it still
-carries CodeWarrior traceback tables naming all 1,295 game functions. The
-v1.2 builds are stripped.
+Target binary: **Prime Target v1.2**, the version on the CD (`Prime Target`;
+`Prime Target LM` has the same code). It has no symbols, so its function
+boundaries and names come from `symbols/prime_target_v12.tsv`, carried over
+from the v1.1 update, which still has CodeWarrior traceback tables naming every
+function (see [v1.2 versus v1.1](#v12-versus-v11)). v1.1 itself still builds
+from its tables alone.
 
 ## Status
 
 Boots through the intro movie and main menu, opens Preferences and the file
 dialogs, plays the prologue and runs the levels at the engine's native 30 ticks
 per second with input, sound effects, the CD-audio soundtrack and QuickTime
-movies. All 398 imported Toolbox routines have implementations.
+movies. All 399 imported Toolbox routines have implementations.
 
 Not done or deliberately absent:
 
@@ -31,11 +34,13 @@ Not done or deliberately absent:
 
 | Path | What |
 |---|---|
-| `tools/extract_game.py` | Copies the HFS volume (`prime.hfv`) to `game/`: data forks, `.rsrc` resource forks, `finder.tsv`/`folders.tsv` with Mac names and type/creator |
+| `tools/extract_game.py` | Copies the game off the CD (BIN/CUE or ISO, or an installed HFS volume) to `game/`: data forks, `.rsrc` resource forks, `finder.tsv`/`folders.tsv` with Mac names and type/creator |
 | `tools/extract_system.py` | Copies the System file's resource fork and the `Fonts` suitcases from a System 7 image to `system/` (cursors, patterns, bitmap fonts) |
 | `tools/rip_cd_audio.py` | Splits the BIN/CUE into `cdaudio/trackNN.wav` + `toc.tsv` (the soundtrack is Red Book audio) |
 | `tools/pef.py` | PEF loader: sections, pattern-initialised data, relocations, imports |
-| `tools/analyze.py` | Instantiates the image at fixed guest addresses, finds functions from traceback tables → `build/image/` |
+| `tools/analyze.py` | Instantiates the image at fixed guest addresses and finds every function (traceback tables or a symbol file, plus the runtime library's call graph) → `build/image/` |
+| `tools/make_symbols.py` | One-off: matches a stripped build against v1.1 and writes its symbol file |
+| `symbols/` | Function boundaries and names for v1.2, with how each differs from v1.1 |
 | `tools/recomp.py` | PowerPC → C lifter → `generated/` |
 | `tools/ppcdis.py` | Disassembler for inspection (TOC loads and calls annotated) |
 | `runtime/` | C++ runtime: guest memory, dispatch, and the Toolbox modules |
@@ -66,16 +71,21 @@ Manager, VBL, Mixed Mode), `mathlib`, `os_misc`, `host` (SDL2).
 
 ```sh
 python -m venv .venv && .venv/Scripts/python -m pip install machfs capstone
-.venv/Scripts/python tools/extract_game.py ../PrimeTarget/Prime/prime.hfv game
+.venv/Scripts/python tools/extract_game.py ../PrimeTarget/Prime/PrimeTarget.cue game
 .venv/Scripts/python tools/extract_system.py ../PrimeTarget/Prime/macos7.hfv system
 .venv/Scripts/python tools/rip_cd_audio.py ../PrimeTarget/Prime/PrimeTarget.cue cdaudio
-.venv/Scripts/python tools/analyze.py "game/Prime Target/Prime Target v11" build/image
+.venv/Scripts/python tools/analyze.py "game/Prime Target/Prime Target" build/image --symbols symbols/prime_target_v12.tsv
 .venv/Scripts/python tools/recomp.py build/image generated
 cmake -S . -B build/msvc -G "Visual Studio 18 2026" -A x64
 cmake --build build/msvc --config Release --parallel
 ```
 
-CMake downloads the official SDL2 2.30.9 Visual C++ package.
+CMake downloads the official SDL2 2.30.9 Visual C++ package. `analyze.py`
+checks the application's SHA-1 against the symbol file, so a different build
+is refused rather than mistranslated.
+
+To build v1.1 instead (from an installed copy that has the update), point
+`analyze.py` at `Prime Target v11` without `--symbols`.
 
 ## Run
 
@@ -107,10 +117,32 @@ Marathon's keypad layout (8/5 move, 4/6 turn), changeable in Preferences.
 On a crash the runtime prints the faulting guest address and the last 32
 guest functions entered.
 
+## v1.2 versus v1.1
+
+`make_symbols.py` places 1,267 of v1.1's 1,295 functions unchanged in v1.2
+(the network code moved to the end of the link order), 28 changed or
+rewritten, and finds one new helper. The `difference` column of the symbol
+file records which. Reading the changed code, v1.2:
+
+* resets monsters and weapons when a saved game is loaded;
+* checks doors, switches and access cards against the player who pressed the
+  action key, not the local player (matters in network games);
+* guards inventory cycling and item use when the player has no items;
+* doubles the delay before a dead player can respawn (1 s to 2 s);
+* reworks the per-damage-type multipliers applied to damage the player takes
+  (which cases are halved or doubled, plus a new 4× case);
+* removes dead monsters' and players' bodies outright while a game-mode flag
+  is set (it is cleared on loading a saved game; probably network play);
+* drops an eye-height adjustment in the physics setup and rewrites
+  `closest_point_on_circle`, `build_links_from_objects` and
+  `initialize_player_weapons`;
+* locks shape pixmaps high in the heap (`HLockHi`, its one new import), part
+  of the low-memory work behind `Prime Target LM`.
+
 ## How it works
 
 * **Function boundaries** come from the traceback tables (exact start via
-  `tb_offset`). The 40 KB CodeWarrior runtime at the end of the code section
+  `tb_offset`) or, for v1.2, the symbol file. The 40 KB CodeWarrior runtime at the end of the code section
   has no tables; its entry points come from call targets and TVector pairs
   (code pointer + TOC) in the data section. 398 of those are import glue.
 * **Control flow**: branches inside a function become `goto`; `bl` becomes a
