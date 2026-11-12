@@ -141,7 +141,12 @@ static void bits_op(Reader &rd, const PictCtx &pc, uint16_t op) {
     uint32_t tab = 0;
     if (is_pixmap && out_depth <= 8) { tab = new_ctab(colors); s.ctab = tab; }
     Surface d = surface_of_port(pc.port);
-    copy_bits(s, d, sr, map_rect(pc, dr), mode, port_clip(pc.port));
+    Rect clip = port_clip(pc.port);
+    Rect mdr = map_rect(pc, dr);
+    logf(LOG_GFX, "  PICT op %02X depth %d pack %d [%d,%d,%d,%d]->[%d,%d,%d,%d] clip [%d,%d,%d,%d] dst base %08X depth %d\n", op,
+         depth, pack_type, sr.left, sr.top, sr.right, sr.bottom, mdr.left, mdr.top, mdr.right, mdr.bottom, clip.left, clip.top,
+         clip.right, clip.bottom, d.base, d.depth);
+    copy_bits(s, d, sr, mdr, mode, clip);
     if (tab) handle_dispose(tab);
     guest_free(buf);
 }

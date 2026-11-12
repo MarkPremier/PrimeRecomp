@@ -228,7 +228,7 @@ static int16_t video_control(uint32_t pb) {
     switch (cs) {
     case 3:   /* cscSetEntries: VDSetEntryRecord {csTable, csStart, csCount} */
     case 8:   /* cscDirectSetEntries */
-        qd::set_device_entries(qd::main_device(), (int16_t)ld16(rec + 4), (int16_t)ld16(rec + 6), ld32(rec));
+        qd::set_hw_entries((int16_t)ld16(rec + 4), (int16_t)ld16(rec + 6), ld32(rec));
         return 0;
     case 4:   /* cscSetGamma */
     case 9:   /* cscGrayPage */

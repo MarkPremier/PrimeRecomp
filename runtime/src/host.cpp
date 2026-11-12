@@ -393,6 +393,19 @@ void present(bool force) {
         snprintf(path, sizeof path, "%s/shot_%03d.bmp", shot_dir, shot_n++);
         SDL_SaveBMP(surf, path);
         SDL_FreeSurface(surf);
+        if (sc.depth == 8) {
+            auto pal = qd::screen_palette();
+            unsigned hist[256] = {0};
+            for (int y = 0; y < 480; y++)
+                for (int x = 0; x < 640; x++) hist[fb[y * sc.row_bytes + x]]++;
+            int top = 0;
+            for (int i = 1; i < 256; i++) if (hist[i] > hist[top]) top = i;
+            unsigned lit = 0;
+            for (size_t i = 0; i < pal.size(); i++) if (pal[i].r | pal[i].g | pal[i].b) lit++;
+            fprintf(stderr, "[shot %d] most common index %d (%u px) rgb %04X %04X %04X; %u non-black palette entries\n",
+                    shot_n - 1, top, hist[top], pal.size() > (size_t)top ? pal[top].r : 0,
+                    pal.size() > (size_t)top ? pal[top].g : 0, pal.size() > (size_t)top ? pal[top].b : 0, lit);
+        }
     }
     if (run_secs && now > (uint64_t)atoi(run_secs) * 1000) { SDL_Quit(); std::_Exit(0); }
     SDL_UpdateTexture(g_tex, nullptr, g_rgba, 640 * 4);

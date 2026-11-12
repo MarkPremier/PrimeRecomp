@@ -23,6 +23,8 @@ static uint32_t g_cur_device = 0, g_main_device = 0;
 static uint32_t g_fallback_port = 0;   /* used while thePort is still NULL */
 static uint32_t g_seed = 1024;
 static uint32_t g_gray_rgn = 0;
+static std::vector<RGB> g_hw_palette;   /* display CLUT, see set_hw_entries */
+static void hw_from_device();
 
 static const int kScreenW = 640, kScreenH = 480;
 static uint32_t g_fb = 0;               /* framebuffer (sized for 32 bpp) */
@@ -215,8 +217,8 @@ Screen screen() {
 
 std::vector<RGB> screen_palette() {
     ensure_devices();
-    uint32_t p = ld32(ld32(ld32(g_main_device) + gd::gdPMap));
-    return read_ctab(ld32(p + pm::pmTable));
+    if (g_hw_palette.empty()) hw_from_device();
+    return g_hw_palette;
 }
 
 void screen_changed() {}
@@ -496,7 +498,26 @@ static void dispose_gworld(uint32_t port) {
     guest_free(port);
 }
 
+/* the colours actually on the display: the video driver's CLUT. QuickDraw's device
+ * colour table only changes through the Color Manager; low-level driver calls (used
+ * for fades) change just the hardware palette. */
+static void hw_from_device() {
+    uint32_t p = ld32(ld32(ld32(g_main_device) + gd::gdPMap));
+    g_hw_palette = read_ctab(ld32(p + pm::pmTable));
+}
+
+void set_hw_entries(int16_t start, int16_t count, uint32_t tbl) {
+    if (g_hw_palette.empty()) hw_from_device();
+    for (int i = 0; i <= count; i++) {
+        uint32_t e = tbl + 8 * i;
+        int idx = start >= 0 ? start + i : (ld16(e) & 0xFF);
+        if (idx < 0 || idx >= (int)g_hw_palette.size()) continue;
+        g_hw_palette[idx] = {ld16(e + 2), ld16(e + 4), ld16(e + 6)};
+    }
+}
+
 void set_device_entries(uint32_t gdh, int16_t start, int16_t count, uint32_t tbl) {
+    if (gdh == g_main_device) set_hw_entries(start, count, tbl);
     uint32_t pmp = ld32(ld32(ld32(gdh) + gd::gdPMap));
     uint32_t ct = ld32(pmp + pm::pmTable);
     if (!ct) return;
@@ -604,6 +625,7 @@ HLE(SetDepth) {
         st16(p + pm::rowBytes, (uint16_t)(rb | 0x8000));
     }
     if (g_qd_theport) st16(g_qd_theport - 122 + 4, (uint16_t)(kScreenW * depth / 8));
+    hw_from_device();
     memset(g_mem + g_fb, 0, kScreenW * kScreenH * 4);
     logf(LOG_GFX, "SetDepth %d\n", depth);
     RET(0);
