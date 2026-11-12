@@ -9,8 +9,23 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/generated/sources.cmake)
 
 file(GLOB PT_RUNTIME_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/runtime/src/*.cpp)
 
+# SDL2 (window, input, audio): official prebuilt Visual C++ development package
+include(FetchContent)
+FetchContent_Declare(sdl2
+    URL https://github.com/libsdl-org/SDL/releases/download/release-2.30.9/SDL2-devel-2.30.9-VC.zip
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+FetchContent_GetProperties(sdl2)
+if(NOT sdl2_POPULATED)
+    FetchContent_Populate(sdl2)
+endif()
+set(SDL2_DIR ${sdl2_SOURCE_DIR}/cmake)
+find_package(SDL2 REQUIRED CONFIG)
+
 add_executable(primetarget ${PT_RUNTIME_SOURCES} ${PT_GENERATED_SOURCES})
 target_include_directories(primetarget PRIVATE runtime/include generated)
+target_link_libraries(primetarget PRIVATE SDL2::SDL2)
+add_custom_command(TARGET primetarget POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:SDL2::SDL2> $<TARGET_FILE_DIR:primetarget>)
 
 if(MSVC)
     target_compile_options(primetarget PRIVATE /W3 /utf-8 /bigobj)

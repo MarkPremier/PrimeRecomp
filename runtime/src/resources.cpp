@@ -165,7 +165,33 @@ static void write_back(ResFile &f) {
     f.dirty = false;
 }
 
+namespace hfs_glue {
+std::vector<std::pair<std::string, std::vector<uint8_t>>> load(const std::wstring &image);
+}
+
+static void load_system_files() {
+    const char *env = getenv("PT_SYSTEM_HFV");
+    fs::path img = env && *env ? fs::u8path(env)
+                               : fs::u8path(data_root()).parent_path().parent_path() / "PrimeTarget" / "Prime" / "macos7.hfv";
+    auto forks = hfs_glue::load(img.wstring());
+    if (forks.empty()) {
+        logf(LOG_UNIMPL, "res: no System file found in %s (set PT_SYSTEM_HFV); system fonts/cursors missing\n",
+             img.u8string().c_str());
+        return;
+    }
+    for (auto &[name, bytes] : forks) {
+        ResFile rf;
+        rf.ref = name == "System" ? 2 : files::alloc_refnum();
+        rf.host = fs::path(L"<system>") / fs::u8path(name);
+        if (!parse_fork(bytes, rf.res)) continue;
+        logf(LOG_RES, "res: system file %s: %zu resources (ref %d)\n", name.c_str(), rf.res.size(), rf.ref);
+        g_chain.push_back(std::move(rf));
+    }
+    st16(0x0A58, 2);   /* SysMap */
+}
+
 void init() {
+    load_system_files();
     fs::path app;
     dir_host(app_vref(), app_dir(), app);
     Entry e;
@@ -278,7 +304,7 @@ HLE(ReleaseResource) { release(ARG(0)); set_err(0); }
 HLE(ResError) { RET((int16_t)g_err); }
 HLE(UseResFile) {
     if (file_by_ref((int16_t)ARG(0)) || (int16_t)ARG(0) == 0) {
-        g_cur = (int16_t)ARG(0) == 0 ? g_chain.back().ref : (int16_t)ARG(0);
+        g_cur = (int16_t)ARG(0) == 0 ? 2 : (int16_t)ARG(0);
         set_err(0);
     } else {
         set_err(-193); /* resFNotFound */

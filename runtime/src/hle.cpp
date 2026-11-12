@@ -1,5 +1,7 @@
 /* Import binding: every PEF import gets a fake TVector whose code address
  * dispatches here, to a registered HLE implementation or a logging stub. */
+#include <windows.h>
+
 #include <cstdarg>
 #include <map>
 #include <set>
@@ -41,10 +43,14 @@ void hle_bind_imports() {
 }
 
 namespace timer { void poll(PPCContext *c); }
+namespace host { void pump(); }
 
 void hle_dispatch(PPCContext *c, uint32_t idx) {
     g_call_counts[idx]++;
     timer::poll(c);   /* Time Manager tasks fire at Toolbox-call safe points */
+    static uint64_t last_pump = 0;
+    uint64_t now = GetTickCount64();
+    if (now - last_pump >= 2) { last_pump = now; host::pump(); }
     const char *name = ppc_import_names[idx];
     if (g_bound[idx]) {
         logf(LOG_HLE, "%-24s r3=%08X r4=%08X r5=%08X r6=%08X  LR=%08X\n", name, c->r[3], c->r[4], c->r[5],

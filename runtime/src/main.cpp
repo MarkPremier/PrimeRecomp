@@ -14,6 +14,7 @@
 
 #include "image_info.h"
 #include "ppc_funcs.h"
+#include "pt/host.h"
 #include "pt/resources.h"
 #include "pt/runtime.h"
 #include "pt/vfs.h"
@@ -142,6 +143,7 @@ int main(int argc, char **argv) {
     lowmem_init();
     vfs::init();
     res::init();
+    host::init();
 
     static PPCContext ctx;
     PPCContext *c = &ctx;
