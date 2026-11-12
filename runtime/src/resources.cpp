@@ -169,16 +169,51 @@ namespace hfs_glue {
 std::vector<std::pair<std::string, std::vector<uint8_t>>> load(const std::wstring &image);
 }
 
+/* system/ (written by tools/extract_system.py): files.tsv lists "relative path <TAB> Mac name hex" */
+static std::vector<std::pair<std::string, std::vector<uint8_t>>> load_system_dir(const fs::path &dir) {
+    std::vector<std::pair<std::string, std::vector<uint8_t>>> out;
+    FILE *list = _wfopen((dir / "files.tsv").c_str(), L"rb");
+    if (!list) return out;
+    char line[1024];
+    while (fgets(line, sizeof line, list)) {
+        std::string s(line);
+        while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
+        size_t tab = s.find('\t');
+        if (tab == std::string::npos) continue;
+        std::string name;
+        for (size_t i = tab + 1; i + 1 < s.size(); i += 2) name += (char)std::stoi(s.substr(i, 2), nullptr, 16);
+        std::vector<uint8_t> bytes;
+        if (FILE *fp = _wfopen((dir / fs::u8path(s.substr(0, tab))).c_str(), L"rb")) {
+            fseek(fp, 0, SEEK_END);
+            bytes.resize((size_t)ftell(fp));
+            fseek(fp, 0, SEEK_SET);
+            if (!bytes.empty()) fread(bytes.data(), 1, bytes.size(), fp);
+            fclose(fp);
+        }
+        if (!bytes.empty()) out.emplace_back(std::move(name), std::move(bytes));
+    }
+    fclose(list);
+    return out;
+}
+
 static void load_system_files() {
-    const char *env = getenv("PT_SYSTEM_HFV");
-    fs::path img = env && *env ? fs::u8path(env)
-                               : fs::u8path(data_root()).parent_path().parent_path() / "PrimeTarget" / "Prime" / "macos7.hfv";
-    auto forks = hfs_glue::load(img.wstring());
+    const char *dir_env = getenv("PT_SYSTEM_DIR");
+    fs::path dir = dir_env && *dir_env ? fs::u8path(dir_env) : fs::u8path(data_root()).parent_path() / "system";
+    auto forks = load_system_dir(dir);
+    fs::path src = dir;
     if (forks.empty()) {
-        logf(LOG_UNIMPL, "res: no System file found in %s (set PT_SYSTEM_HFV); system fonts/cursors missing\n",
-             img.u8string().c_str());
+        /* fall back to reading a Mac OS disk image directly */
+        const char *env = getenv("PT_SYSTEM_HFV");
+        src = env && *env ? fs::u8path(env)
+                          : fs::u8path(data_root()).parent_path().parent_path() / "PrimeTarget" / "Prime" / "macos7.hfv";
+        forks = hfs_glue::load(src.wstring());
+    }
+    if (forks.empty()) {
+        logf(LOG_UNIMPL, "res: no System file in %s or the disk image (run tools/extract_system.py); "
+             "system fonts/cursors missing\n", dir.u8string().c_str());
         return;
     }
+    logf(LOG_RES, "res: system resources from %s\n", src.u8string().c_str());
     for (auto &[name, bytes] : forks) {
         ResFile rf;
         rf.ref = name == "System" ? 2 : files::alloc_refnum();

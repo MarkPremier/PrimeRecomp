@@ -4,7 +4,7 @@ Native Windows port of *Prime Target* (WizardWorks/MacSoft, 1996), a Mac
 PowerPC game on a licensed Marathon 2 engine. The original PowerPC code is
 translated to C ahead of time and runs against a reimplementation of the
 classic Mac Toolbox. No emulator and no Apple ROM; system fonts and cursors
-are read at runtime from your own Mac OS disk image.
+come from your own Mac OS disk image, copied into `system/` once.
 
 Target binary: **Prime Target v1.1** (`Prime Target v11`), because it still
 carries CodeWarrior traceback tables naming all 1,295 game functions. The
@@ -32,17 +32,18 @@ Not done or deliberately absent:
 | Path | What |
 |---|---|
 | `tools/extract_game.py` | Copies the HFS volume (`prime.hfv`) to `game/`: data forks, `.rsrc` resource forks, `finder.tsv`/`folders.tsv` with Mac names and type/creator |
+| `tools/extract_system.py` | Copies the System file's resource fork and the `Fonts` suitcases from a System 7 image to `system/` (cursors, patterns, bitmap fonts) |
 | `tools/rip_cd_audio.py` | Splits the BIN/CUE into `cdaudio/trackNN.wav` + `toc.tsv` (the soundtrack is Red Book audio) |
 | `tools/pef.py` | PEF loader: sections, pattern-initialised data, relocations, imports |
 | `tools/analyze.py` | Instantiates the image at fixed guest addresses, finds functions from traceback tables → `build/image/` |
 | `tools/recomp.py` | PowerPC → C lifter → `generated/` |
 | `tools/ppcdis.py` | Disassembler for inspection (TOC loads and calls annotated) |
 | `runtime/` | C++ runtime: guest memory, dispatch, and the Toolbox modules |
-| `game/`, `cdaudio/`, `user/` | Extracted data, ripped music, writable "Macintosh HD" (prefs). Not in git. |
+| `game/`, `system/`, `cdaudio/`, `user/` | Extracted game data, Mac OS resources, ripped music, writable "Macintosh HD" (prefs). Not in git. |
 
 Runtime modules (`runtime/src`): `memory` (Memory Manager), `vfs`/`files`
 (virtual HFS, File/Folder Manager), `resources` + `hfs_reader` (Resource
-Manager; System file and font suitcases from the user's disk image),
+Manager; System file and font suitcases from `system/`, or a disk image),
 `qd_core`/`qd_blit`/`qd_pict`/`qd_text` (Color QuickDraw, CopyBits, PICT,
 fonts), `windows`, `menus`, `dialogs` (Dialog/Control/TextEdit/List/Scrap/
 Print), `events`, `sound`, `drivers` (.AppleCD, video driver, Sound Input),
@@ -66,6 +67,7 @@ Manager, VBL, Mixed Mode), `mathlib`, `os_misc`, `host` (SDL2).
 ```sh
 python -m venv .venv && .venv/Scripts/python -m pip install machfs capstone
 .venv/Scripts/python tools/extract_game.py ../PrimeTarget/Prime/prime.hfv game
+.venv/Scripts/python tools/extract_system.py ../PrimeTarget/Prime/macos7.hfv system
 .venv/Scripts/python tools/rip_cd_audio.py ../PrimeTarget/Prime/PrimeTarget.cue cdaudio
 .venv/Scripts/python tools/analyze.py "game/Prime Target/Prime Target v11" build/image
 .venv/Scripts/python tools/recomp.py build/image generated
@@ -82,8 +84,9 @@ build/msvc/Release/primetarget.exe
 ```
 
 The runtime finds `game/` next to the executable or in a parent folder, and
-the Mac OS image at `../PrimeTarget/Prime/macos7.hfv` relative to the repo.
-Override with `PT_GAME_DIR` and `PT_SYSTEM_HFV`. `PT_SCALE` sets the window
+`system/` beside it. If `system/` is missing it reads the System file straight
+from `../PrimeTarget/Prime/macos7.hfv`. Override with `PT_GAME_DIR`,
+`PT_SYSTEM_DIR` and `PT_SYSTEM_HFV`. `PT_SCALE` sets the window
 scale (default 2); Alt+Enter toggles full screen.
 
 Keys map to the Apple Extended Keyboard: Left Alt is Command, Right Alt /

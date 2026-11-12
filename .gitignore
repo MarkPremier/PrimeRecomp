@@ -1,6 +1,7 @@
 .venv/
 build/
 game/
+system/
 cdaudio/
 user/
 __pycache__/
