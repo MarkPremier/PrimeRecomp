@@ -47,6 +47,22 @@ struct Channel {
 };
 
 static std::map<uint32_t, Channel> g_chans;    /* keyed by guest SndChannelPtr */
+
+/* QuickTime movie soundtracks */
+struct MovieVoice { std::vector<int16_t> pcm; int channels; double rate; double pos; };
+static std::map<uint32_t, MovieVoice> g_movie_voices;
+
+void movie_audio_start(uint32_t id, std::vector<int16_t> pcm, int channels, double rate, double offset_s) {
+    host::lock_audio();
+    if (pcm.empty()) g_movie_voices.erase(id);
+    else g_movie_voices[id] = {std::move(pcm), channels < 1 ? 1 : channels, rate, offset_s * rate};
+    host::unlock_audio();
+}
+void movie_audio_stop(uint32_t id) {
+    host::lock_audio();
+    g_movie_voices.erase(id);
+    host::unlock_audio();
+}
 static std::deque<std::pair<uint32_t, Cmd>> g_callbacks;
 static int g_out_l = 0x100, g_out_r = 0x100;   /* default output volume */
 
@@ -145,6 +161,20 @@ static void mix(int16_t *out, int frames) {
             acc[2 * i + 1] += (int32_t)(s[1] * gain * ch.vol_r / 256.0 * g_out_r / 256.0);
             v.pos += v.rate * ch.rate_mul / host::kAudioRate;
         }
+    }
+    for (auto it = g_movie_voices.begin(); it != g_movie_voices.end();) {
+        MovieVoice &v = it->second;
+        size_t nframes = v.pcm.size() / v.channels;
+        double step = v.rate / host::kAudioRate;
+        for (int i = 0; i < frames && (size_t)v.pos < nframes; i++) {
+            size_t f = (size_t)v.pos;
+            int l = v.pcm[f * v.channels], r = v.pcm[f * v.channels + (v.channels > 1 ? 1 : 0)];
+            acc[2 * i] += l * g_out_l / 256;
+            acc[2 * i + 1] += r * g_out_r / 256;
+            v.pos += step;
+        }
+        if ((size_t)v.pos >= nframes) it = g_movie_voices.erase(it);
+        else ++it;
     }
     cd::mix(acc.data(), frames);
     for (int i = 0; i < frames * 2; i++) out[i] = (int16_t)std::clamp(acc[i], -32768, 32767);

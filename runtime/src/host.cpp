@@ -140,6 +140,9 @@ void init() {
         std::lock_guard<std::mutex> lk(g_audio_mutex);
         if (g_audio_fill) g_audio_fill((int16_t *)stream, len / 4);
         else memset(stream, 0, len);
+        /* PT_AUDIO_DUMP=file.raw: raw 44.1 kHz stereo s16 capture for checking the mixer */
+        static FILE *dump = getenv("PT_AUDIO_DUMP") ? fopen(getenv("PT_AUDIO_DUMP"), "wb") : nullptr;
+        if (dump) { fwrite(stream, 1, len, dump); fflush(dump); }
     };
     g_audio = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
     if (g_audio) SDL_PauseAudioDevice(g_audio, 0);

@@ -27,6 +27,7 @@ static bool gestalt_value(uint32_t sel, uint32_t &out) {
     case 'qd  ': out = 0x0230; return true;            /* Color QuickDraw 32-bit, v2.3 */
     case 'qdrw': out = 0x0F; return true;
     case 'qtim': out = 0x02508000; return true;        /* QuickTime 2.5 */
+    case 'icmp': out = 0x0250; return true;            /* Image Compression Manager */
     case 'evnt': out = 0x07; return true;
     case 'snd ': out = 0x00000F3F; return true;        /* stereo, 16-bit, input, play+record, mixer */
     case 'sm  ': out = 0x0300; return true;            /* Sound Manager 3.x */

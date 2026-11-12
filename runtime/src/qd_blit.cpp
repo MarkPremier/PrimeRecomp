@@ -83,6 +83,21 @@ void copy_bits(const Surface &src, const Surface &dst, Rect sr, Rect dr, int mod
         }
     }
     std::map<uint32_t, uint32_t> direct_cache;
+    /* direct -> indexed: a 15-bit RGB inverse table per destination colour table */
+    static std::vector<uint8_t> inv;
+    static uint32_t inv_key = 0;
+    bool use_inv = !src_indexed && dst.depth == 8;
+    if (use_inv) {
+        uint32_t key = ctab_seed(dst.ctab) ^ dst.ctab;
+        if (inv.empty() || key != inv_key) {
+            inv.assign(32768, 0);
+            for (uint32_t i = 0; i < 32768; i++) {
+                RGB c{(uint16_t)(((i >> 10) & 31) * 0x0842), (uint16_t)(((i >> 5) & 31) * 0x0842), (uint16_t)((i & 31) * 0x0842)};
+                inv[i] = (uint8_t)color_to_index(dst.ctab, c);
+            }
+            inv_key = key;
+        }
+    }
     uint32_t allones = dst.depth >= 32 ? 0xFFFFFF : (1u << dst.depth) - 1;
     uint32_t dst_bk = rgb_to_pixel(dst, bkc), dst_fg = rgb_to_pixel(dst, fgc);
     uint32_t src_bk = src_indexed ? (src.depth == 1 ? 0 : color_to_index(src.ctab, bkc)) : rgb_to_pixel(src, bkc);
@@ -97,7 +112,12 @@ void copy_bits(const Surface &src, const Surface &dst, Rect sr, Rect dr, int mod
             if (transparent && sp == src_bk) continue;
             uint32_t dp;
             if (src_indexed) dp = lut[sp];
-            else {
+            else if (use_inv) {
+                uint32_t r5, g5, b5;
+                if (src.depth == 16) { r5 = (sp >> 10) & 31; g5 = (sp >> 5) & 31; b5 = sp & 31; }
+                else { r5 = (sp >> 19) & 31; g5 = (sp >> 11) & 31; b5 = (sp >> 3) & 31; }
+                dp = inv[r5 << 10 | g5 << 5 | b5];
+            } else {
                 auto it = direct_cache.find(sp);
                 if (it != direct_cache.end()) dp = it->second;
                 else dp = direct_cache[sp] = rgb_to_pixel(dst, pixel_to_rgb(src, sp));
