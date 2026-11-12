@@ -12,7 +12,10 @@
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
 
+#include <cstdio>
 #include <cstdlib>
+#include <string>
+#include <vector>
 #include <deque>
 #include <mutex>
 
@@ -184,7 +187,65 @@ static void window_to_guest(int wx, int wy, int &gx, int &gy) {
     gy = (int)ly;
 }
 
+/* PT_INPUT="t_ms action args; ...": scripted input for automated testing.
+ * actions: move X Y | click X Y | down | up | key NAME (return, esc, space, up, down, left, right, tab, or a letter) */
+struct Scripted { uint64_t t; std::string op; int a, b; std::string key; };
+static std::vector<Scripted> g_script;
+static size_t g_script_pos = 0;
+static void load_script() {
+    const char *env = getenv("PT_INPUT");
+    if (!env) return;
+    std::string s(env);
+    size_t p = 0;
+    while (p < s.size()) {
+        size_t e = s.find(';', p);
+        std::string item = s.substr(p, e == std::string::npos ? std::string::npos : e - p);
+        Scripted x{0, "", 0, 0, ""};
+        char op[32] = {0}, key[32] = {0};
+        unsigned long long t = 0;
+        int n = sscanf(item.c_str(), " %llu %31s %d %d", &t, op, &x.a, &x.b);
+        if (n >= 2) {
+            x.t = t; x.op = op;
+            if (x.op == "key") { sscanf(item.c_str(), " %*llu %*s %31s", key); x.key = key; }
+            g_script.push_back(x);
+        }
+        if (e == std::string::npos) break;
+        p = e + 1;
+    }
+}
+static int key_code_named(const std::string &k) {
+    static const struct { const char *n; int c; uint8_t ch; } t[] = {
+        {"return", 0x24, 0x0D}, {"esc", 0x35, 0x1B}, {"space", 0x31, ' '}, {"tab", 0x30, 9},
+        {"up", 0x7E, 0x1E}, {"down", 0x7D, 0x1F}, {"left", 0x7B, 0x1C}, {"right", 0x7C, 0x1D}};
+    for (auto &x : t) if (k == x.n) return x.c << 8 | x.ch;
+    static const char *letters = "asdfhgzxcv?bqweryt";
+    if (k.size() == 1) { const char *p = strchr(letters, k[0]); if (p) return (int)(p - letters) << 8 | k[0]; }
+    return -1;
+}
+static void run_script() {
+    static bool loaded = false;
+    if (!loaded) { loaded = true; load_script(); }
+    uint64_t now = SDL_GetTicks64();
+    while (g_script_pos < g_script.size() && g_script[g_script_pos].t <= now) {
+        Scripted &x = g_script[g_script_pos++];
+        if (x.op == "move" || x.op == "click") { g_mx = x.a; g_my = x.b; }
+        if (x.op == "click" || x.op == "down") { g_button = true; post_event({1, 0, ticks(), (int16_t)g_my, (int16_t)g_mx, modifiers()}); }
+        if (x.op == "click" || x.op == "up") {
+            if (x.op == "click") { g_button = false; post_event({2, 0, ticks(), (int16_t)g_my, (int16_t)g_mx, modifiers()}); }
+            else { g_button = false; post_event({2, 0, ticks(), (int16_t)g_my, (int16_t)g_mx, modifiers()}); }
+        }
+        if (x.op == "key") {
+            int kc = key_code_named(x.key);
+            if (kc >= 0) {
+                post_event({3, (uint32_t)kc, ticks(), (int16_t)g_my, (int16_t)g_mx, modifiers()});
+                post_event({4, (uint32_t)kc, ticks(), (int16_t)g_my, (int16_t)g_mx, modifiers()});
+            }
+        }
+    }
+}
+
 void pump() {
+    run_script();
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
         switch (ev.type) {

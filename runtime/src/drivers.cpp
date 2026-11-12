@@ -13,6 +13,11 @@
 #include <string>
 #include <vector>
 
+#include <algorithm>
+#include <cstdio>
+
+#include "pt/host.h"
+#include "pt/qd.h"
 #include "pt/runtime.h"
 
 using namespace pt;
@@ -27,6 +32,53 @@ static uint32_t g_leadout = 0;
 
 static bool g_playing = false, g_paused = false;
 static uint32_t g_play_start = 0, g_play_end = 0;   /* absolute frames */
+static uint64_t g_pos = 0;                           /* playback position in samples from frame 0 */
+static int g_volume = 7;                             /* playthrough level 0..7 */
+static std::vector<FILE *> g_files;
+
+static const Track *track_at(uint32_t frame) {
+    for (auto &t : g_tracks)
+        if (frame >= t.start && frame < t.start + t.length) return &t;
+    return nullptr;
+}
+
+/* called from the audio thread with the audio lock held */
+void mix(int32_t *acc, int frames) {
+    if (!g_playing || g_paused || g_tracks.empty()) return;
+    if (g_files.empty()) g_files.assign(g_tracks.size(), nullptr);
+    int done = 0;
+    int16_t buf[2 * 2048];
+    while (done < frames) {
+        uint32_t frame = (uint32_t)(g_pos / 588);
+        if (g_play_end && frame >= g_play_end) { g_playing = false; return; }
+        const Track *t = track_at(frame);
+        if (!t || !t->audio) { g_playing = false; return; }
+        size_t ti = (size_t)(t - g_tracks.data());
+        if (!g_files[ti]) {
+            char name[32];
+            snprintf(name, sizeof name, "track%02d.wav", t->number);
+            std::string path = data_root() + "\\..\\cdaudio\\" + name;
+            g_files[ti] = fopen(path.c_str(), "rb");
+            if (!g_files[ti]) { g_playing = false; return; }
+        }
+        uint64_t in_track = g_pos - (uint64_t)t->start * 588;
+        uint64_t left = (uint64_t)t->length * 588 - in_track;
+        int n = (int)std::min<uint64_t>({(uint64_t)(frames - done), left, 2048});
+        if (g_play_end) n = (int)std::min<uint64_t>((uint64_t)n, (uint64_t)g_play_end * 588 - g_pos);
+        if (n <= 0) { g_playing = false; return; }
+        _fseeki64(g_files[ti], 44 + (int64_t)in_track * 4, SEEK_SET);
+        size_t got = fread(buf, 4, n, g_files[ti]);
+        for (size_t i = 0; i < got; i++) {
+            acc[2 * (done + i)] += buf[2 * i] * g_volume / 7;
+            acc[2 * (done + i) + 1] += buf[2 * i + 1] * g_volume / 7;
+        }
+        if (got < (size_t)n) { g_playing = false; return; }
+        g_pos += n;
+        done += n;
+    }
+}
+
+void set_volume(int level) { g_volume = level < 0 ? 0 : level > 7 ? 7 : level; }
 
 static void load_toc() {
     if (!g_tracks.empty()) return;
@@ -122,6 +174,7 @@ static int16_t control(uint32_t pb) {
     }
     case 103: /* AudioTrackSearch: position, then play mode */
         g_play_start = decode_position(ld16(p), ld32(p + 2));
+        g_pos = (uint64_t)g_play_start * 588;
         g_playing = ld16(p + 6) != 0;
         g_paused = false;
         logf(LOG_SND, "cd: track search to frame %u (play=%d)\n", g_play_start, g_playing);
@@ -129,7 +182,7 @@ static int16_t control(uint32_t pb) {
     case 104: { /* AudioPlay: position type, address, stop flag, play mode */
         uint32_t pos = decode_position(ld16(p), ld32(p + 2));
         if (ld16(p + 6)) g_play_end = pos;        /* this call sets the stop address */
-        else { g_play_start = pos; g_playing = true; g_paused = false; }
+        else { g_play_start = pos; g_pos = (uint64_t)pos * 588; g_playing = true; g_paused = false; }
         logf(LOG_SND, "cd: play frame %u..%u\n", g_play_start, g_play_end);
         return 0;
     }
@@ -142,7 +195,7 @@ static int16_t control(uint32_t pb) {
         st8(p + 1, 9);                               /* play mode: stereo */
         st8(p + 2, 0);
         uint8_t m[3];
-        msf(g_play_start, m);
+        msf((uint32_t)(g_pos / 588), m);
         st8(p + 3, m[0]); st8(p + 4, m[1]); st8(p + 5, m[2]);
         return 0;
     }
@@ -168,9 +221,36 @@ HLE(OpenDriver) {
     RET(-35);
 }
 
+/* the screen's video driver (gdRefNum -55): colour-table and gamma control calls */
+static int16_t video_control(uint32_t pb) {
+    int16_t cs = (int16_t)ld16(pb + 26);
+    uint32_t rec = ld32(pb + 28);   /* csParam holds a pointer to the parameter record */
+    switch (cs) {
+    case 3:   /* cscSetEntries: VDSetEntryRecord {csTable, csStart, csCount} */
+    case 8:   /* cscDirectSetEntries */
+        qd::set_device_entries(qd::main_device(), (int16_t)ld16(rec + 4), (int16_t)ld16(rec + 6), ld32(rec));
+        return 0;
+    case 4:   /* cscSetGamma */
+    case 9:   /* cscGrayPage */
+    case 1: case 2: case 5: case 6: case 7:
+        return 0;
+    default:
+        logf(LOG_UNIMPL, "video driver csCode %d\n", cs);
+        return 0;
+    }
+}
+
 static int16_t driver_control(uint32_t pb) {
     int16_t ref = (int16_t)ld16(pb + 24);
-    int16_t err = ref == kAppleCDRefNum ? cd::control(pb) : -28; /* notOpenErr */
+    int16_t err;
+    if (ref == -55) {
+        err = video_control(pb);
+        st16(pb + 16, (uint16_t)err);
+        return err;
+    }
+    host::lock_audio();
+    err = ref == kAppleCDRefNum ? cd::control(pb) : -28; /* notOpenErr */
+    host::unlock_audio();
     logf(LOG_SND, "driver control ref %d csCode %d -> %d\n", ref, (int16_t)ld16(pb + 26), err);
     st16(pb + 16, (uint16_t)err);
     return err;
@@ -216,7 +296,11 @@ HLE(SPBGetDeviceInfo) {
 HLE(SPBSetDeviceInfo) {
     switch (ARG(1)) {
     case 'sour': g_input_source = (int16_t)ld16(ARG(2)); RET(0); return;
-    case 'plth': g_playthrough = (int16_t)ld16(ARG(2)); RET(0); return;
+    case 'plth':
+        g_playthrough = (int16_t)ld16(ARG(2));
+        host::lock_audio(); cd::set_volume(g_playthrough); host::unlock_audio();
+        RET(0);
+        return;
     default:
         logf(LOG_UNIMPL, "SPBSetDeviceInfo %08X\n", ARG(1));
         RET(-231);

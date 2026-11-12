@@ -5,6 +5,7 @@
 
 #include "pt/qd.h"
 #include "pt/resources.h"
+#include "pt/ui.h"
 
 namespace pt::qd {
 
@@ -56,19 +57,28 @@ static const Strike &strike_for(int family, int size, int face) {
     auto it = cache.find(key);
     if (it != cache.end()) return it->second;
     Strike s;
-    std::vector<uint8_t> fond, data;
+    std::vector<uint8_t> data;
     int want_style = face & 3;   /* bold | italic */
-    if (res::get_bytes('FOND', (int16_t)family, fond) && fond.size() > 54) {
+    /* several files may define the family (the System's FOND can point at ROM strikes);
+     * use the best-matching strike that actually exists */
+    int best_score = 1 << 30, best_style = 0;
+    std::vector<uint8_t> best;
+    for (auto &fond : res::get_bytes_all('FOND', (int16_t)family)) {
+        if (fond.size() <= 54) continue;
         int n = (int16_t)be16(&fond[52]) + 1;
-        int best_id = -1, best_score = 1 << 30, best_style = 0;
         for (int i = 0; i < n && 54 + 6 * i + 6 <= (int)fond.size(); i++) {
             int fsize = be16(&fond[54 + 6 * i]), fstyle = be16(&fond[56 + 6 * i]), fid = (int16_t)be16(&fond[58 + 6 * i]);
             if (fsize == 0) continue;   /* outline font */
             int score = std::abs(fsize - size) * 8 + (fstyle == want_style ? 0 : fstyle == 0 ? 2 : 6);
-            if (score < best_score) { best_score = score; best_id = fid; best_style = fstyle; }
+            if (score >= best_score) continue;
+            if (!res::get_bytes('NFNT', (int16_t)fid, data) && !res::get_bytes('FONT', (int16_t)fid, data)) continue;
+            best_score = score;
+            best_style = fstyle;
+            best = data;
         }
-        if (best_id >= 0 && (res::get_bytes('NFNT', (int16_t)best_id, data) || res::get_bytes('FONT', (int16_t)best_id, data)))
-            parse_font(data, s);
+    }
+    if (!best.empty()) {
+        parse_font(best, s);
         s.synth_bold = (want_style & 1) && !(best_style & 1);
         s.synth_italic = (want_style & 2) && !(best_style & 2);
     }
@@ -163,6 +173,39 @@ void draw_text(uint32_t port, const uint8_t *t, int len) {
 
 }  // namespace pt::qd
 
+namespace pt::qd {
+void te_text_box(uint32_t port, uint32_t text, int len, const Rect &box, int just) {
+    int a, d, w, l;
+    font_info(port, a, d, w, l);
+    int line_h = a + d + l;
+    int y = box.top + a;
+    int i = 0;
+    uint32_t clip = ld32(port + port::clipRgn);
+    Rect old_clip = region_bbox(clip);
+    set_region(clip, rect_sect(old_clip, box));
+    while (i < len && y - a < box.bottom) {
+        int start = i, last_space = -1, width = box.right - box.left;
+        while (i < len && g_mem[text + i] != '\r') {
+            if (g_mem[text + i] == ' ') last_space = i;
+            if (text_width(port, g_mem + text + start, i - start + 1) > width) {
+                if (last_space > start) i = last_space;
+                break;
+            }
+            i++;
+        }
+        int n = i - start;
+        int lw = text_width(port, g_mem + text + start, n);
+        int x = just == 1 ? box.left + (width - lw) / 2 : just == -1 ? box.right - lw : box.left;
+        st16(port + port::pnLoc, (uint16_t)y);
+        st16(port + port::pnLoc + 2, (uint16_t)x);
+        draw_text(port, g_mem + text + start, n);
+        if (i < len && (g_mem[text + i] == '\r' || g_mem[text + i] == ' ')) i++;
+        y += line_h;
+    }
+    set_region(clip, old_clip);
+}
+}  // namespace pt::qd
+
 using namespace pt;
 using namespace pt::qd;
 
@@ -197,38 +240,6 @@ HLE(TruncText) {
 }
 
 HLE(TETextBox) {
-    /* void TETextBox(const void *text, long length, const Rect *box, short just): word-wrapped text */
-    uint32_t port = tport();
-    uint32_t text = ARG(0);
-    int len = (int)ARG(1);
-    Rect box = read_rect(ARG(2));
-    int just = (int16_t)ARG(3);
-    int a, d, w, l;
-    font_info(port, a, d, w, l);
-    int line_h = a + d + l;
-    int y = box.top + a;
-    int i = 0;
-    uint32_t saved_clip = ld32(port + port::clipRgn);
-    Rect old_clip = region_bbox(saved_clip);
-    set_region(saved_clip, rect_sect(old_clip, box));
-    while (i < len && y - a < box.bottom) {
-        int start = i, last_space = -1, width = box.right - box.left;
-        while (i < len && g_mem[text + i] != '\r') {
-            if (g_mem[text + i] == ' ') last_space = i;
-            if (text_width(port, g_mem + text + start, i - start + 1) > width) {
-                if (last_space > start) i = last_space;
-                break;
-            }
-            i++;
-        }
-        int n = i - start;
-        int lw = text_width(port, g_mem + text + start, n);
-        int x = just == 1 ? box.left + (width - lw) / 2 : just == -1 ? box.right - lw : box.left;
-        st16(port + port::pnLoc, (uint16_t)y);
-        st16(port + port::pnLoc + 2, (uint16_t)x);
-        draw_text(port, g_mem + text + start, n);
-        if (i < len && (g_mem[text + i] == '\r' || g_mem[text + i] == ' ')) i++;
-        y += line_h;
-    }
-    set_region(saved_clip, old_clip);
+    /* void TETextBox(const void *text, long length, const Rect *box, short just) */
+    te_text_box(tport(), ARG(0), (int)ARG(1), read_rect(ARG(2)), (int16_t)ARG(3));
 }

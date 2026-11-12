@@ -76,6 +76,7 @@ void set_current_port(uint32_t port);
 uint32_t current_device();       /* GDHandle */
 void set_current_device(uint32_t gdh);
 uint32_t main_device();
+void set_device_entries(uint32_t gdh, int16_t start, int16_t count, uint32_t colorspecs);
 
 /* ---------- ports / surfaces ---------- */
 bool is_color_port(uint32_t port);

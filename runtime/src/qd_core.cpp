@@ -496,6 +496,23 @@ static void dispose_gworld(uint32_t port) {
     guest_free(port);
 }
 
+void set_device_entries(uint32_t gdh, int16_t start, int16_t count, uint32_t tbl) {
+    uint32_t pmp = ld32(ld32(ld32(gdh) + gd::gdPMap));
+    uint32_t ct = ld32(pmp + pm::pmTable);
+    if (!ct) return;
+    uint32_t p = ld32(ct);
+    int n = (int16_t)ld16(p + 6) + 1;
+    for (int i = 0; i <= count; i++) {
+        uint32_t e = tbl + 8 * i;
+        int idx = start >= 0 ? start + i : (ld16(e) & 0xFF);
+        if (idx < 0 || idx >= n) continue;
+        uint32_t d = p + 8 + 8 * idx;
+        st16(d, (uint16_t)idx);
+        st16(d + 2, ld16(e + 2)); st16(d + 4, ld16(e + 4)); st16(d + 6, ld16(e + 6));
+    }
+    st32(p, next_seed());
+}
+
 bool is_gworld(uint32_t port) { return g_gworlds.count(port) != 0; }
 uint32_t gworld_device(uint32_t port) {
     auto it = g_gworlds.find(port);
@@ -593,22 +610,7 @@ HLE(SetDepth) {
 }
 HLE(SetEntries) {
     /* SetEntries(short start, short count, CSpecArray aTable): modifies the current device's CLUT */
-    int16_t start = (int16_t)ARG(0), count = (int16_t)ARG(1);
-    uint32_t tbl = ARG(2);
-    uint32_t pmp = ld32(ld32(ld32(current_device()) + gd::gdPMap));
-    uint32_t ct = ld32(pmp + pm::pmTable);
-    if (!ct) return;
-    uint32_t p = ld32(ct);
-    int n = (int16_t)ld16(p + 6) + 1;
-    for (int i = 0; i <= count; i++) {
-        uint32_t e = tbl + 8 * i;
-        int idx = start >= 0 ? start + i : (ld16(e) & 0xFF);
-        if (idx < 0 || idx >= n) continue;
-        uint32_t d = p + 8 + 8 * idx;
-        st16(d, (uint16_t)idx);
-        st16(d + 2, ld16(e + 2)); st16(d + 4, ld16(e + 4)); st16(d + 6, ld16(e + 6));
-    }
-    st32(p, next_seed());
+    set_device_entries(current_device(), (int16_t)ARG(0), (int16_t)ARG(1), ARG(2));
 }
 HLE(CTabChanged) { if (ARG(0) && ld32(ARG(0))) st32(ld32(ARG(0)), next_seed()); }
 HLE(GetCTSeed) { RET(next_seed()); }

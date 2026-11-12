@@ -140,7 +140,9 @@ static inline double bits2f(uint64_t v) { double d; memcpy(&d, &v, 8); return d;
 /* ---- function-entry trace ring (read by the crash handler) ---- */
 extern uint32_t g_trace_ring[256];
 extern unsigned g_trace_pos;
-#define PT_FN_ENTER(addr) (g_trace_ring[g_trace_pos++ & 255] = (addr))
+extern uint8_t g_fn_watch_enabled;
+void pt_fn_watch(PPCContext *c, uint32_t addr);
+#define PT_FN_ENTER(addr) (g_trace_ring[g_trace_pos++ & 255] = (addr), g_fn_watch_enabled ? pt_fn_watch(c, (addr)) : (void)0)
 
 /* ---- control transfer (implemented in the runtime) ---- */
 void ppc_call_indirect(PPCContext *c, uint32_t target);

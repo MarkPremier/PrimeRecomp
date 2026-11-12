@@ -17,6 +17,7 @@
 #include "pt/qd.h"
 #include "pt/resources.h"
 #include "pt/runtime.h"
+#include "pt/ui.h"
 
 namespace pt::wm {
 
@@ -184,12 +185,23 @@ static void draw_frame(const Win &x) {
     }
 }
 
+static void erase_content(const Win &x, const Rect &global) {
+    /* PaintOne: fill the exposed content with the window's background colour */
+    Surface s = surface_of_port(x.w);
+    uint32_t bk = rgb_to_pixel(s, port_bk(x.w));
+    Rect c = rect_sect(global, {0, 0, 480, 640});
+    for (int y = c.top; y < c.bottom; y++)
+        for (int xx = c.left; xx < c.right; xx++)
+            if (g_owner[y * 640 + xx] == x.id) put_pixel_raw(s, xx, y, bk);
+}
+
 static void invalidate_global(const Rect &r) {
-    /* windows get update regions; uncovered desktop repaints */
+    /* windows get update regions (and their exposed content erased); uncovered desktop repaints */
     for (auto &x : g_wins) {
         if (!ld8(x.w + wr::visible)) continue;
         Rect c = rect_sect(content_global(x.w), r);
         if (rect_empty(c)) continue;
+        erase_content(x, c);
         uint32_t ur = ld32(x.w + wr::updateRgn);
         set_region(ur, rect_union(region_bbox(ur), c));
     }
@@ -359,7 +371,21 @@ int find_window(int v, int h, uint32_t &out) {
     return 0;
 }
 
-uint32_t window_kind_offset() { return wr::windowKind; }
+bool begin_update(uint32_t w) {
+    if (!find(w)) return false;
+    Rect u = region_bbox(ld32(w + wr::updateRgn));
+    Rect cr = region_bbox(ld32(w + wr::contRgn));
+    Rect pr = read_rect(w + port::portRect);
+    Rect local{(int16_t)(u.top - cr.top + pr.top), (int16_t)(u.left - cr.left + pr.left), (int16_t)(u.bottom - cr.top + pr.top),
+               (int16_t)(u.right - cr.left + pr.left)};
+    set_region(ld32(w + port::visRgn), rect_empty(u) ? Rect{0, 0, 0, 0} : rect_sect(pr, local));
+    set_region(ld32(w + wr::updateRgn), {0, 0, 0, 0});
+    return !rect_empty(u);
+}
+void end_update(uint32_t w) {
+    if (!find(w)) return;
+    set_region(ld32(w + port::visRgn), read_rect(w + port::portRect));
+}
 
 }  // namespace pt::wm
 
@@ -438,16 +464,7 @@ HLE(DragWindow) {
     select_window(w);
 }
 
-HLE(BeginUpdate) {
-    uint32_t w = ARG(0);
-    Rect u = region_bbox(ld32(w + wr::updateRgn));
-    Rect cr = region_bbox(ld32(w + wr::contRgn));
-    Rect pr = read_rect(w + port::portRect);
-    Rect local{(int16_t)(u.top - cr.top + pr.top), (int16_t)(u.left - cr.left + pr.left), (int16_t)(u.bottom - cr.top + pr.top),
-               (int16_t)(u.right - cr.left + pr.left)};
-    set_region(ld32(w + port::visRgn), rect_sect(pr, local));
-    set_region(ld32(w + wr::updateRgn), {0, 0, 0, 0});
-}
+HLE(BeginUpdate) { begin_update(ARG(0)); }
 HLE(EndUpdate) {
     uint32_t w = ARG(0);
     set_region(ld32(w + port::visRgn), read_rect(w + port::portRect));

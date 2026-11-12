@@ -51,10 +51,40 @@ static Task *find(uint32_t tm) {
     return nullptr;
 }
 
+/* vertical-blanking tasks (SlotVInstall): VBLTask qLink(0) qType(4) vblAddr(6) vblCount(10) vblPhase(12) */
+static std::vector<uint32_t> g_vbls;
+static double g_next_vbl = 0;
+
+static void poll_vbl(PPCContext *c, double now) {
+    if (g_vbls.empty() || now < g_next_vbl) return;
+    g_next_vbl = now + 1e6 / 60.0;
+    auto list = g_vbls;
+    for (uint32_t t : list) {
+        int16_t n = (int16_t)ld16(t + 10);
+        if (n <= 0) continue;
+        st16(t + 10, (uint16_t)(n - 1));
+        if (n - 1 == 0) {
+            uint32_t arg = t;
+            guest_call(c, ld32(t + 6), &arg, 1);
+            if ((int16_t)ld16(t + 10) == 0)
+                for (auto it = g_vbls.begin(); it != g_vbls.end(); ++it)
+                    if (*it == t) { g_vbls.erase(it); break; }
+        }
+    }
+}
+
+void vbl_install(uint32_t t) { g_vbls.push_back(t); }
+void vbl_remove(uint32_t t) {
+    for (auto it = g_vbls.begin(); it != g_vbls.end(); ++it)
+        if (*it == t) { g_vbls.erase(it); return; }
+}
+
 void poll(PPCContext *c) {
-    if (g_in_poll || g_tasks.empty()) return;
+    if (g_in_poll) return;
     g_in_poll = true;
     double now = now_us();
+    poll_vbl(c, now);
+    if (g_tasks.empty()) { g_in_poll = false; return; }
     for (size_t i = 0; i < g_tasks.size(); i++) {
         Task t = g_tasks[i];
         if (!t.primed || now < t.due_us) continue;
@@ -99,3 +129,6 @@ HLE(PrimeTime) {
     t->primed = true;
     st16(ARG(0) + 4, ld16(ARG(0) + 4) | 0x8000);
 }
+
+HLE(SlotVInstall) { vbl_install(ARG(0)); RET(0); }
+HLE(SlotVRemove) { vbl_remove(ARG(0)); RET(0); }

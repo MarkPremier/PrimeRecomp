@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdio>
 #include <map>
+#include <set>
 
 #include "pt/runtime.h"
 #include "pt/vfs.h"
@@ -29,8 +30,10 @@ struct OpenFile {
 static std::map<int16_t, OpenFile> g_open;
 static int16_t g_next_ref = 3;
 
+static std::set<int16_t> g_reserved;   /* refNums held by in-memory resource files */
 int16_t alloc_refnum() {
-    while (g_open.count(g_next_ref)) g_next_ref++;
+    while (g_open.count(g_next_ref) || g_reserved.count(g_next_ref)) g_next_ref++;
+    g_reserved.insert(g_next_ref);
     return g_next_ref++;
 }
 

@@ -20,6 +20,7 @@
 #include "pt/vfs.h"
 
 namespace pt {
+namespace snd { void init(); }
 
 /* the low-memory globals Mac code commonly reads directly */
 static void lowmem_init() {
@@ -144,6 +145,7 @@ int main(int argc, char **argv) {
     vfs::init();
     res::init();
     host::init();
+    snd::init();
 
     static PPCContext ctx;
     PPCContext *c = &ctx;

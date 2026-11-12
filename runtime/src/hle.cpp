@@ -44,10 +44,16 @@ void hle_bind_imports() {
 
 namespace timer { void poll(PPCContext *c); }
 namespace host { void pump(); }
+namespace snd { void poll(PPCContext *c); }
+
+static PPCContext *g_cur_ctx = nullptr;
+PPCContext *current_ctx() { return g_cur_ctx; }
 
 void hle_dispatch(PPCContext *c, uint32_t idx) {
     g_call_counts[idx]++;
+    g_cur_ctx = c;
     timer::poll(c);   /* Time Manager tasks fire at Toolbox-call safe points */
+    snd::poll(c);     /* sound completion callbacks likewise */
     static uint64_t last_pump = 0;
     uint64_t now = GetTickCount64();
     if (now - last_pump >= 2) { last_pump = now; host::pump(); }

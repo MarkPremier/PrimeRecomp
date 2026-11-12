@@ -2,6 +2,7 @@
 #include <windows.h>
 
 #include <cstdarg>
+#include <string>
 #include <vector>
 
 #include "image_info.h"
@@ -13,8 +14,19 @@ extern "C" const unsigned ppc_import_count;
 
 uint32_t g_trace_ring[256];
 unsigned g_trace_pos;
+uint8_t g_fn_watch_enabled;
 
 static std::vector<PPCFunc> g_direct;  /* one slot per code word */
+static std::vector<uint8_t> g_watch;   /* PT_WATCH: functions to log on entry */
+
+extern "C" void pt_fn_watch(PPCContext *c, uint32_t addr) {
+    uint32_t i = (addr - PT_IMAGE_CODE_BASE) / 4;
+    if (i >= g_watch.size() || !g_watch[i]) return;
+    const char *name = "?";
+    for (unsigned k = 0; k < ppc_func_count; k++)
+        if (ppc_func_table[k].addr == addr) { name = ppc_func_table[k].name; break; }
+    fprintf(stderr, "-> %s(%08X, %08X, %08X, %08X) LR=%08X\n", name, c->r[3], c->r[4], c->r[5], c->r[6], c->lr);
+}
 
 namespace pt {
 
@@ -22,6 +34,22 @@ void dispatch_init() {
     g_direct.assign(PT_IMAGE_CODE_SIZE / 4, nullptr);
     for (unsigned i = 0; i < ppc_func_count; i++)
         g_direct[(ppc_func_table[i].addr - PT_IMAGE_CODE_BASE) / 4] = ppc_func_table[i].fn;
+    if (const char *w = getenv("PT_WATCH")) {
+        g_watch.assign(PT_IMAGE_CODE_SIZE / 4, 0);
+        std::string list(w);
+        size_t p = 0;
+        while (p <= list.size()) {
+            size_t e = list.find(',', p);
+            std::string name = list.substr(p, e == std::string::npos ? std::string::npos : e - p);
+            for (unsigned i = 0; i < ppc_func_count; i++)
+                if (name == ppc_func_table[i].name || name == "*") {
+                    g_watch[(ppc_func_table[i].addr - PT_IMAGE_CODE_BASE) / 4] = 1;
+                    g_fn_watch_enabled = 1;
+                }
+            if (e == std::string::npos) break;
+            p = e + 1;
+        }
+    }
 }
 
 const char *func_name(uint32_t addr) {

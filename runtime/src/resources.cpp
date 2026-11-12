@@ -248,6 +248,14 @@ bool get_bytes(uint32_t type, int16_t id, std::vector<uint8_t> &out) {
     return true;
 }
 
+std::vector<std::vector<uint8_t>> get_bytes_all(uint32_t type, int16_t id) {
+    std::vector<std::vector<uint8_t>> out;
+    for (auto &f : g_chain)
+        for (auto &r : f.res)
+            if (r.type == type && r.id == id) out.push_back(r.data);
+    return out;
+}
+
 uint32_t get_handle(uint32_t type, int16_t id) {
     Res *r = find(type, id, false);
     return r ? materialize(*r) : 0;
