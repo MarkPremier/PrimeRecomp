@@ -79,7 +79,22 @@ static std::string env_or(const char *name, const std::string &def) {
     return v && *v ? std::string(v) : def;
 }
 
-std::string data_root() { return env_or("PT_GAME_DIR", exe_dir() + "\\game"); }
+std::string data_root() {
+    static std::string root;
+    if (!root.empty()) return root;
+    if (const char *v = getenv("PT_GAME_DIR"); v && *v) return root = v;
+    /* <exe>/game, or a game folder in a parent (running from build/msvc/Release in the repo) */
+    std::string dir = exe_dir();
+    for (int i = 0; i < 5; i++) {
+        std::string cand = dir + "\\game";
+        DWORD a = GetFileAttributesA((cand + "\\Prime Target").c_str());
+        if (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY)) return root = cand;
+        size_t p = dir.find_last_of("\\/");
+        if (p == std::string::npos) break;
+        dir = dir.substr(0, p);
+    }
+    return root = exe_dir() + "\\game";
+}
 
 uint32_t ticks() { return (uint32_t)(GetTickCount64() * 60 / 1000); }
 
