@@ -152,7 +152,29 @@ static int16_t g_app_vref;
 static uint32_t g_app_dir;
 static std::string g_app_name;
 
+/* working-directory refnums (old Standard File / SFReply): stand for (volume, dirID) */
+struct WD { int16_t vref; uint32_t dir; };
+static std::vector<WD> g_wds;
+static const int16_t kWDBase = -32000;
+
+int16_t make_wd(int16_t vref, uint32_t dir) {
+    for (size_t i = 0; i < g_wds.size(); i++)
+        if (g_wds[i].vref == vref && g_wds[i].dir == dir) return (int16_t)(kWDBase - (int)i);
+    g_wds.push_back({vref, dir});
+    return (int16_t)(kWDBase - (int)(g_wds.size() - 1));
+}
+
+static void resolve_wd(int16_t &vref, uint32_t &dir) {
+    if (vref > kWDBase) return;
+    size_t i = (size_t)(kWDBase - vref);
+    if (i >= g_wds.size()) return;
+    if (dir == 0) dir = g_wds[i].dir;
+    vref = g_wds[i].vref;
+}
+
 static Volume *vol(int16_t vref) {
+    uint32_t unused = 1;
+    resolve_wd(vref, unused);
     if (vref == 0) vref = g_app_vref;
     for (auto &v : g_vols)
         if (v.vref == vref) return &v;
@@ -201,6 +223,7 @@ int16_t volume_by_name(const std::string &n) {
 }
 
 bool dir_host(int16_t vref, uint32_t dirID, fs::path &out) {
+    resolve_wd(vref, dirID);
     Volume *v = vol(vref);
     if (!v) return false;
     if (dirID == 0) dirID = (vref == 0 || vref == g_app_vref) ? g_app_dir : 2;
@@ -294,6 +317,7 @@ bool lookup(int16_t vref, uint32_t dirID, const std::string &mac_name, Entry &ou
 }
 
 int16_t resolve(int16_t vref, uint32_t dirID, const std::string &path, Spec &out) {
+    resolve_wd(vref, dirID);
     if (vref == 0) vref = g_app_vref;
     if (dirID == 0) dirID = (vref == g_app_vref) ? g_app_dir : 2;
     std::string p = path;

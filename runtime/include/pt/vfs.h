@@ -48,6 +48,8 @@ uint32_t dir_parent(int16_t vref, uint32_t dirID);
 std::string dir_name(int16_t vref, uint32_t dirID);
 std::vector<Entry> list(int16_t vref, uint32_t dirID);  /* Mac order: case-insensitive name */
 
+int16_t make_wd(int16_t vref, uint32_t dirID);          /* working-directory refnum */
+
 /* names */
 bool lookup(int16_t vref, uint32_t dirID, const std::string &mac_name, Entry &out);
 /* resolve a (vRefNum, dirID, partial or full pathname) triple; returns noErr or fnfErr
