@@ -15,6 +15,7 @@ extern "C" const unsigned ppc_import_count;
 uint32_t g_trace_ring[256];
 unsigned g_trace_pos;
 uint8_t g_fn_watch_enabled;
+volatile uint32_t g_irq_pending;
 
 static std::vector<PPCFunc> g_direct;  /* one slot per code word */
 static std::vector<uint8_t> g_watch;   /* PT_WATCH: functions to log on entry */
@@ -69,7 +70,9 @@ const char *func_name(uint32_t addr) {
 uint32_t guest_call(PPCContext *c, uint32_t tvector, const uint32_t *args, int nargs) {
     PPCContext saved = *c;
     uint32_t code = ld32(tvector), toc = ld32(tvector + 4);
-    c->r[1] = (saved.r[1] - 256) & ~15u;  /* fresh frame below the caller's */
+    /* fresh frame well below the caller's: an interrupt may land between a prologue's
+     * register saves (into the red zone below r1) and its stwu */
+    c->r[1] = (saved.r[1] - 1024) & ~15u;
     st32(c->r[1], saved.r[1]);             /* back chain */
     for (int i = 0; i < nargs && i < 8; i++) c->r[3 + i] = args[i];
     c->r[2] = toc;

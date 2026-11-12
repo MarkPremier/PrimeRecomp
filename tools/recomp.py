@@ -167,6 +167,8 @@ class FuncLifter:
             return f'c->lr = 0x{pc + 4:08X}u; fn_{t:08X}(c);'
         if self.start <= t < self.end:
             self.labels.add(t)
+            if t <= pc:   # loop back-edge: interrupt safe point
+                return f'{{ PT_SAFEPOINT(); goto L_{t:08X}; }}'
             return f'goto L_{t:08X};'
         if t in self.func_starts:
             self.calls.add(t)

@@ -30,9 +30,12 @@ HLE(CallUniversalProc) {
 namespace pt::timer {
 
 struct Task {
-    uint32_t tm;        /* guest TMTask address */
+    uint32_t tm;          /* guest TMTask address */
     bool primed;
-    double due_us;      /* host microseconds */
+    double due_us;        /* host microseconds */
+    bool extended;        /* installed with InsXTime: drift-free re-priming */
+    bool in_callback;
+    double last_due;
 };
 static std::vector<Task> g_tasks;
 static bool g_in_poll = false;
@@ -89,6 +92,8 @@ void poll(PPCContext *c) {
         Task t = g_tasks[i];
         if (!t.primed || now < t.due_us) continue;
         g_tasks[i].primed = false;
+        g_tasks[i].in_callback = true;
+        g_tasks[i].last_due = t.due_us;
         /* TMTask: qLink(0) qType(4) tmAddr(6) tmCount(10) tmWakeUp(14) tmReserved(18) */
         st16(t.tm + 4, ld16(t.tm + 4) & 0x7FFF);  /* clear "active" bit */
         uint32_t proc = ld32(t.tm + 6);
@@ -96,6 +101,7 @@ void poll(PPCContext *c) {
             uint32_t arg = t.tm;
             guest_call(c, proc, &arg, 1);
         }
+        if (Task *after = find(t.tm)) after->in_callback = false;
     }
     g_in_poll = false;
 }
@@ -105,10 +111,10 @@ void poll(PPCContext *c) {
 using namespace pt::timer;
 
 HLE(InsTime) {
-    if (!find(ARG(0))) g_tasks.push_back({ARG(0), false, 0});
+    if (!find(ARG(0))) g_tasks.push_back({ARG(0), false, 0, false, false, 0});
 }
 HLE(InsXTime) {
-    if (!find(ARG(0))) g_tasks.push_back({ARG(0), false, 0});
+    if (!find(ARG(0))) g_tasks.push_back({ARG(0), false, 0, true, false, 0});
 }
 HLE(RmvTime) {
     for (auto it = g_tasks.begin(); it != g_tasks.end(); ++it)
@@ -125,7 +131,10 @@ HLE(PrimeTime) {
     if (!t) return;
     int32_t count = (int32_t)ARG(1);
     double delay = count >= 0 ? count * 1000.0 : -(double)count;
-    t->due_us = now_us() + delay;
+    double now = now_us();
+    /* extended tasks re-primed from their own callback keep a fixed period (tmWakeUp) */
+    if (t->extended && t->in_callback && t->last_due + delay > now - 100000.0) t->due_us = t->last_due + delay;
+    else t->due_us = now + delay;
     t->primed = true;
     st16(ARG(0) + 4, ld16(ARG(0) + 4) | 0x8000);
 }

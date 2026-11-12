@@ -206,7 +206,7 @@ static void load_script() {
         int n = sscanf(item.c_str(), " %llu %31s %d %d", &t, op, &x.a, &x.b);
         if (n >= 2) {
             x.t = t; x.op = op;
-            if (x.op == "key") { sscanf(item.c_str(), " %*llu %*s %31s", key); x.key = key; }
+            if (x.op == "key" || x.op == "hold" || x.op == "release") { sscanf(item.c_str(), " %*llu %*s %31s", key); x.key = key; }
             g_script.push_back(x);
         }
         if (e == std::string::npos) break;
@@ -218,6 +218,14 @@ static int key_code_named(const std::string &k) {
         {"return", 0x24, 0x0D}, {"esc", 0x35, 0x1B}, {"space", 0x31, ' '}, {"tab", 0x30, 9},
         {"up", 0x7E, 0x1E}, {"down", 0x7D, 0x1F}, {"left", 0x7B, 0x1C}, {"right", 0x7C, 0x1D}};
     for (auto &x : t) if (k == x.n) return x.c << 8 | x.ch;
+    if (k.size() == 3 && k[0] == 'k' && k[1] == 'p' && k[2] >= '0' && k[2] <= '9') {
+        static const int kp[10] = {0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5B, 0x5C};
+        return kp[k[2] - '0'] << 8 | k[2];
+    }
+    if (k == "shift") return 0x38 << 8;
+    if (k == "ctrl") return 0x3B << 8;
+    if (k == "option") return 0x3A << 8;
+    if (k == "cmd") return 0x37 << 8;
     static const char *letters = "asdfhgzxcv?bqweryt";
     if (k.size() == 1) { const char *p = strchr(letters, k[0]); if (p) return (int)(p - letters) << 8 | k[0]; }
     return -1;
@@ -233,6 +241,14 @@ static void run_script() {
         if (x.op == "click" || x.op == "up") {
             if (x.op == "click") { g_button = false; post_event({2, 0, ticks(), (int16_t)g_my, (int16_t)g_mx, modifiers()}); }
             else { g_button = false; post_event({2, 0, ticks(), (int16_t)g_my, (int16_t)g_mx, modifiers()}); }
+        }
+        if (x.op == "hold" || x.op == "release") {
+            int kc = key_code_named(x.key);
+            if (kc >= 0) {
+                int code = kc >> 8;
+                if (x.op == "hold") g_keys[code >> 3] |= (uint8_t)(1 << (code & 7));
+                else g_keys[code >> 3] &= (uint8_t)~(1 << (code & 7));
+            }
         }
         if (x.op == "key") {
             int kc = key_code_named(x.key);

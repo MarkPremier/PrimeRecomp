@@ -34,14 +34,34 @@ void copy_bits(const Surface &src, const Surface &dst, Rect sr, Rect dr, int mod
     RGB fgc = port ? port_fg(port) : RGB{0, 0, 0}, bkc = port ? port_bk(port) : RGB{0xFFFF, 0xFFFF, 0xFFFF};
 
     /* fast path: plain copy, same pixel format, no scaling */
-    if (m == 0 && !scaled && !transparent && src.depth >= 8 && same_colors(src, dst) && !dst.occl) {
+    if (m == 0 && !scaled && !transparent && src.depth >= 8 && same_colors(src, dst)) {
         int bpp = src.depth / 8;
         for (int y = c.top; y < c.bottom; y++) {
             int sy = y - dr.top + sr.top - src.bounds.top, sx = c.left - dr.left + sr.left - src.bounds.left;
             if (sy < 0 || sx < 0) continue;
             uint32_t s = src.base + (uint32_t)sy * src.row_bytes + (uint32_t)sx * bpp;
-            uint32_t d = dst.base + (uint32_t)(y - dst.bounds.top) * dst.row_bytes + (uint32_t)(c.left - dst.bounds.left) * bpp;
-            memmove(g_mem + d, g_mem + s, (size_t)(c.right - c.left) * bpp);
+            int py = y - dst.bounds.top, px0 = c.left - dst.bounds.left, w = c.right - c.left;
+            uint32_t d = dst.base + (uint32_t)py * dst.row_bytes + (uint32_t)px0 * bpp;
+            if (!dst.occl || py < 0 || py >= 480) {
+                memmove(g_mem + d, g_mem + s, (size_t)w * bpp);
+                continue;
+            }
+            /* copy only the runs of pixels this window owns on screen */
+            const uint8_t *own = dst.occl + py * 640;
+            int x = 0;
+            while (x < w) {
+                int gx = px0 + x;
+                bool mine = gx < 0 || gx >= 640 || own[gx] == dst.owner;
+                int run = 1;
+                while (x + run < w) {
+                    int g2 = px0 + x + run;
+                    bool m2 = g2 < 0 || g2 >= 640 || own[g2] == dst.owner;
+                    if (m2 != mine) break;
+                    run++;
+                }
+                if (mine) memmove(g_mem + d + (uint32_t)x * bpp, g_mem + s + (uint32_t)x * bpp, (size_t)run * bpp);
+                x += run;
+            }
         }
         return;
     }

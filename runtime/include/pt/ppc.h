@@ -144,6 +144,14 @@ extern uint8_t g_fn_watch_enabled;
 void pt_fn_watch(PPCContext *c, uint32_t addr);
 #define PT_FN_ENTER(addr) (g_trace_ring[g_trace_pos++ & 255] = (addr), g_fn_watch_enabled ? pt_fn_watch(c, (addr)) : (void)0)
 
+/* ---- interrupt safe points ----
+ * The generated code checks this flag on every backward branch; a host thread
+ * raises it every millisecond so Time Manager / VBL tasks and completion
+ * routines run promptly even while the game spins in its own loops. */
+extern volatile uint32_t g_irq_pending;
+void ppc_irq_poll(PPCContext *c);
+#define PT_SAFEPOINT() do { if (g_irq_pending) ppc_irq_poll(c); } while (0)
+
 /* ---- control transfer (implemented in the runtime) ---- */
 void ppc_call_indirect(PPCContext *c, uint32_t target);
 PT_NORETURN void ppc_fatal(const char *fmt, ...);

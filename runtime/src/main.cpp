@@ -21,6 +21,7 @@
 
 namespace pt {
 namespace snd { void init(); }
+void start_interrupt_clock();
 
 /* the low-memory globals Mac code commonly reads directly */
 static void lowmem_init() {
@@ -146,6 +147,7 @@ int main(int argc, char **argv) {
     res::init();
     host::init();
     snd::init();
+    start_interrupt_clock();
 
     static PPCContext ctx;
     PPCContext *c = &ctx;

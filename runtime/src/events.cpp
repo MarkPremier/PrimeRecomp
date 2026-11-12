@@ -76,6 +76,15 @@ HLE(GetKeys) {
     uint8_t k[16];
     host::key_map(k);
     memcpy(g_mem + ARG(0), k, 16);
+    if (g_log_mask & LOG_EVT) {
+        bool any = false;
+        for (int i = 0; i < 16; i++) any |= k[i] != 0;
+        if (any) {
+            logf(LOG_EVT, "GetKeys:");
+            for (int i = 0; i < 128; i++) if ((k[i >> 3] >> (i & 7)) & 1) logf(LOG_EVT, " %02X", i);
+            logf(LOG_EVT, " (LR %08X)\n", c->lr);
+        }
+    }
 }
 
 HLE(GetMouse) {
