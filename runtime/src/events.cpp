@@ -145,7 +145,44 @@ HLE(InitCursor) {
 HLE(SetCursor) { host::set_cursor(g_mem + ARG(0)); }
 HLE(HideCursor) { host::hide_cursor(); }
 HLE(ShowCursor) { host::show_cursor(); }
-HLE(GetCursor) { RET(res::get_handle('CURS', (int16_t)ARG(0))); }
+/* Without a System file: a plain watch cursor of our own for CURS 4 (watchCursor),
+ * the only System cursor the game asks for. */
+static uint32_t builtin_cursor(int16_t id) {
+    static const char *const watch[16] = {
+        "....XXXXXXXX....", "....XXXXXXXX....", "...XXXXXXXXXX...", "..XX...X....XX..",
+        ".X.....X......X.", ".X.....X......X.", "X......X.......X", "X......XXXXX...X",
+        "X..............X", ".X............X.", ".X............X.", "..XX........XX..",
+        "...XXXXXXXXXX...", "....XXXXXXXX....", "....XXXXXXXX....", "................",
+    };
+    if (id != 4) return 0;
+    static uint32_t h = 0;
+    if (h) return h;
+    h = handle_new(68, true);
+    uint32_t p = ld32(h);
+    for (int y = 0; y < 16; y++) {
+        uint16_t data = 0, mask = 0;
+        int l = 16, r = -1;
+        for (int x = 0; x < 16; x++)
+            if (watch[y][x] == 'X') {
+                data |= 0x8000 >> x;
+                if (x < l) l = x;
+                if (x > r) r = x;
+            }
+        for (int x = l; x <= r; x++) mask |= 0x8000 >> x;   /* solid face behind the outline */
+        st16(p + 2 * y, data);
+        st16(p + 32 + 2 * y, mask);
+    }
+    st16(p + 64, 7);   /* hot spot v, h */
+    st16(p + 66, 7);
+    return h;
+}
+
+HLE(GetCursor) {
+    uint32_t h = res::get_handle('CURS', (int16_t)ARG(0));
+    if (!h) h = builtin_cursor((int16_t)ARG(0));
+    logf(LOG_RES, "GetCursor(%d) -> %08X\n", (int16_t)ARG(0), h);
+    RET(h);
+}
 
 /* ---------- Apple Event Manager: nothing is ever delivered ---------- */
 HLE(AEInstallEventHandler) { RET(0); }

@@ -21,6 +21,15 @@ struct Strike {
 
 static uint16_t be16(const uint8_t *p) { return (uint16_t)(p[0] << 8 | p[1]); }
 
+/* font_gdi.cpp: fallback strikes rendered from Windows fonts */
+struct GdiStrike {
+    int first = 0, last = 0, widMax = 0, kernMax = 0, ascent = 0, descent = 0, leading = 0, height = 0;
+    int row_bytes = 0;
+    std::vector<uint8_t> bits;
+    std::vector<uint16_t> loc, ow;
+};
+bool gdi_strike(int family, int size, bool bold, bool italic, GdiStrike &out);
+
 static bool parse_font(const std::vector<uint8_t> &d, Strike &s) {
     if (d.size() < 26) return false;
     s.first = be16(&d[2]);
@@ -83,6 +92,15 @@ static const Strike &strike_for(int family, int size, int face) {
         s.synth_italic = (want_style & 2) && !(best_style & 2);
     }
     if (!s.valid && res::get_bytes('FONT', (int16_t)(family * 128 + size), data)) parse_font(data, s);
+    /* no System file at all: build the strike from a similar Windows font */
+    static const bool no_system = res::get_bytes_all('FOND', 0).empty() && res::get_bytes_all('FOND', 3).empty();
+    GdiStrike g;
+    if (!s.valid && no_system && gdi_strike(family, size, want_style & 1, want_style & 2, g)) {
+        s.first = g.first; s.last = g.last; s.widMax = g.widMax; s.kernMax = g.kernMax;
+        s.ascent = g.ascent; s.descent = g.descent; s.leading = g.leading; s.height = g.height;
+        s.row_bytes = g.row_bytes; s.bits = std::move(g.bits); s.loc = std::move(g.loc); s.ow = std::move(g.ow);
+        s.valid = true;
+    }
     if (!s.valid && family != 3) {
         logf(LOG_GFX, "font family %d size %d missing; using Geneva\n", family, size);
         Strike g = strike_for(3, size, face);

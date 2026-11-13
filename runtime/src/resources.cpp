@@ -202,15 +202,25 @@ static void load_system_files() {
     auto forks = load_system_dir(dir);
     fs::path src = dir;
     if (forks.empty()) {
-        /* fall back to reading a Mac OS disk image directly */
-        const char *env = getenv("PT_SYSTEM_HFV");
-        src = env && *env ? fs::u8path(env)
-                          : fs::u8path(data_root()).parent_path().parent_path() / "PrimeTarget" / "Prime" / "macos7.hfv";
-        forks = hfs_glue::load(src.wstring());
+        /* else read a Mac OS disk image directly: PT_SYSTEM_HFV, any .hfv/.dsk beside the
+         * program (SheepShaver/Basilisk II disks), or the development layout's macos7.hfv */
+        std::vector<fs::path> images;
+        if (const char *env = getenv("PT_SYSTEM_HFV"); env && *env) images.push_back(fs::u8path(env));
+        fs::path home = fs::u8path(data_root()).parent_path();
+        std::error_code ec;
+        for (auto &e : fs::directory_iterator(home, ec)) {
+            std::wstring x = e.path().extension().wstring();
+            for (auto &ch : x) ch = (wchar_t)towlower(ch);
+            if ((x == L".hfv" || x == L".dsk") && e.is_regular_file(ec)) images.push_back(e.path());
+        }
+        images.push_back(home.parent_path() / "PrimeTarget" / "Prime" / "macos7.hfv");
+        for (auto &img : images) {
+            forks = hfs_glue::load(img.wstring());
+            if (!forks.empty()) { src = img; break; }
+        }
     }
     if (forks.empty()) {
-        logf(LOG_UNIMPL, "res: no System file in %s or the disk image (run tools/extract_system.py); "
-             "system fonts/cursors missing\n", dir.u8string().c_str());
+        logf(LOG_UNIMPL, "res: no Mac OS System file found; using built-in substitute fonts and cursor\n");
         return;
     }
     logf(LOG_RES, "res: system resources from %s\n", src.u8string().c_str());

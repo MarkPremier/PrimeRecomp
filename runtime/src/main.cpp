@@ -2,7 +2,6 @@
  *
  * Environment:
  *   PT_GAME_DIR   folder holding the extracted volume (default: <exe>/game)
- *   PT_IMAGE_DIR  folder holding code.bin/data.bin (default: <exe>/image)
  *   PT_LOG        comma list: hle,unimpl,mem,file,res,gfx,snd,evt,all (default: unimpl)
  */
 #include <windows.h>
@@ -10,7 +9,9 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <string>
+#include <vector>
 
 #include "image_info.h"
 #include "ppc_funcs.h"
@@ -21,6 +22,7 @@
 
 namespace pt {
 namespace snd { void init(); }
+namespace setup { bool import_game(const std::filesystem::path &root); }
 void start_interrupt_clock();
 
 /* the low-memory globals Mac code commonly reads directly */
@@ -33,6 +35,7 @@ static void lowmem_init() {
 }
 
 void dispatch_init();
+std::string load_game_fragment(const std::vector<uint8_t> &blob);
 const char *func_name(uint32_t addr);
 
 unsigned g_log_mask = LOG_UNIMPL;
@@ -64,6 +67,13 @@ static void dump_trace() {
     va_end(ap);
     dump_trace();
     fflush(stderr);
+    if (!getenv("PT_RUN_SECONDS")) {   /* players launch from Explorer and never see stderr */
+        char msg[1024];
+        va_start(ap, fmt);
+        vsnprintf(msg, sizeof msg, fmt, ap);
+        va_end(ap);
+        MessageBoxA(nullptr, msg, "Prime Target", MB_OK | MB_ICONERROR);
+    }
     ExitProcess(1);
 }
 
@@ -79,31 +89,44 @@ static std::string env_or(const char *name, const std::string &def) {
     return v && *v ? std::string(v) : def;
 }
 
+/* UTF-8 path of the extracted game volume */
 std::string data_root() {
     static std::string root;
     if (!root.empty()) return root;
     if (const char *v = getenv("PT_GAME_DIR"); v && *v) return root = v;
+    wchar_t buf[MAX_PATH * 4];
+    GetModuleFileNameW(nullptr, buf, MAX_PATH * 4);
+    std::filesystem::path home = std::filesystem::path(buf).parent_path(), dir = home;
     /* <exe>/game, or a game folder in a parent (running from build/msvc/Release in the repo) */
-    std::string dir = exe_dir();
-    for (int i = 0; i < 5; i++) {
-        std::string cand = dir + "\\game";
-        DWORD a = GetFileAttributesA((cand + "\\Prime Target").c_str());
-        if (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY)) return root = cand;
-        size_t p = dir.find_last_of("\\/");
-        if (p == std::string::npos) break;
-        dir = dir.substr(0, p);
+    for (int i = 0; i < 5 && !dir.empty(); i++, dir = dir.parent_path()) {
+        std::error_code ec;
+        if (std::filesystem::is_directory(dir / "game" / "Prime Target", ec)) return root = (dir / "game").u8string();
+        if (dir == dir.parent_path()) break;
     }
-    return root = exe_dir() + "\\game";
+    /* first run: copy the game off the player's CD image into <exe>/game */
+    if (!setup::import_game(home)) ExitProcess(0);
+    return root = (home / "game").u8string();
 }
 
 uint32_t ticks() { return (uint32_t)(GetTickCount64() * 60 / 1000); }
 
-static void load_blob(const std::string &path, uint32_t addr, uint32_t size) {
-    FILE *f = fopen(path.c_str(), "rb");
-    if (!f) fatal("cannot open %s", path.c_str());
-    size_t n = fread(g_mem + addr, 1, size, f);
-    fclose(f);
-    if (n != size) fatal("%s: read %zu bytes, expected %u", path.c_str(), n, size);
+/* the game's own application file (data fork) holds the PowerPC fragment */
+static void load_fragment() {
+    vfs::Entry e;
+    if (!vfs::lookup(vfs::app_vref(), vfs::app_dir(), vfs::app_name(), e))
+        fatal("The game files were not found in %s (the application \"%s\" is missing).", data_root().c_str(),
+              vfs::mac_to_utf8(vfs::app_name()).c_str());
+    std::vector<uint8_t> blob;
+    if (FILE *f = _wfopen(e.host.c_str(), L"rb")) {
+        fseek(f, 0, SEEK_END);
+        blob.resize((size_t)ftell(f));
+        fseek(f, 0, SEEK_SET);
+        if (!blob.empty() && fread(blob.data(), 1, blob.size(), f) != blob.size()) blob.clear();
+        fclose(f);
+    }
+    if (blob.empty()) fatal("cannot read %s", e.host.u8string().c_str());
+    std::string why = load_game_fragment(blob);
+    if (!why.empty()) fatal("%s: %s", e.host.u8string().c_str(), why.c_str());
 }
 
 static void parse_log_env() {
@@ -151,14 +174,12 @@ int main(int argc, char **argv) {
     parse_log_env();
     AddVectoredExceptionHandler(1, on_fault);
     mem_init();
-    std::string image = env_or("PT_IMAGE_DIR", exe_dir() + "\\image");
-    load_blob(image + "\\code.bin", PT_IMAGE_CODE_BASE, PT_IMAGE_CODE_SIZE);
-    load_blob(image + "\\data.bin", PT_IMAGE_DATA_BASE, PT_IMAGE_DATA_SIZE);
+    logf(LOG_HLE | LOG_UNIMPL, "game data: %s\n", data_root().c_str());
+    vfs::init();
+    load_fragment();
     dispatch_init();
     hle_bind_imports();
-    logf(LOG_HLE | LOG_UNIMPL, "game data: %s\n", data_root().c_str());
     lowmem_init();
-    vfs::init();
     res::init();
     host::init();
     snd::init();

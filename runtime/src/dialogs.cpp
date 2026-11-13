@@ -717,7 +717,14 @@ HLE(ShortenDITL) {
     int n = (int16_t)ARG(1);
     auto list = items(d);
     int keep = std::max(0, (int)list.size() - n);
+    uint32_t saved = current_port();
+    set_current_port(d);
     for (int i = keep; i < (int)list.size(); i++) {
+        /* removed items leave the screen (the game's preference panes rely on it) */
+        Rect r = list[i].rect;
+        if (!hidden(r))
+            fill_rect_solid(d, {(int16_t)(r.top - 4), (int16_t)(r.left - 4), (int16_t)(r.bottom + 4), (int16_t)(r.right + 4)},
+                            port_bk(d));
         int t = list[i].type & 0x7F;
         if (t >= 4 && t <= 7 && list[i].handle) dispose_control(list[i].handle);
         else if ((t == 8 || t == 16) && list[i].handle) handle_dispose(list[i].handle);
@@ -728,6 +735,7 @@ HLE(ShortenDITL) {
         handle_set_size(ih, cut);
         st16(ld32(ih), (uint16_t)(keep - 1));
     }
+    set_current_port(saved);
     draw_dialog(d);
 }
 

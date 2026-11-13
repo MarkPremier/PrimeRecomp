@@ -8,6 +8,7 @@
  * The TOC comes from cdaudio/toc.tsv (tools/rip_cd_audio.py). Playback state
  * is tracked here; the audio itself is produced by the mixer (sound module).
  */
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -57,8 +58,7 @@ void mix(int32_t *acc, int frames) {
         if (!g_files[ti]) {
             char name[32];
             snprintf(name, sizeof name, "track%02d.wav", t->number);
-            std::string path = data_root() + "\\..\\cdaudio\\" + name;
-            g_files[ti] = fopen(path.c_str(), "rb");
+            g_files[ti] = _wfopen((std::filesystem::u8path(data_root()).parent_path() / "cdaudio" / name).c_str(), L"rb");
             if (!g_files[ti]) { g_playing = false; return; }
         }
         uint64_t in_track = g_pos - (uint64_t)t->start * 588;
@@ -82,8 +82,9 @@ void set_volume(int level) { g_volume = level < 0 ? 0 : level > 7 ? 7 : level; }
 
 static void load_toc() {
     if (!g_tracks.empty()) return;
-    std::string path = data_root() + "\\..\\cdaudio\\toc.tsv";
-    std::ifstream f(path);
+    std::filesystem::path toc = std::filesystem::u8path(data_root()).parent_path() / "cdaudio" / "toc.tsv";
+    std::string path = toc.u8string();
+    std::ifstream f(toc);
     std::string line;
     while (std::getline(f, line)) {
         std::istringstream ss(line);
@@ -92,7 +93,7 @@ static void load_toc() {
         if (n == "leadout") g_leadout = (uint32_t)std::stoul(start);
         else if (!n.empty()) g_tracks.push_back({std::stoi(n), type == "audio", (uint32_t)std::stoul(start), (uint32_t)std::stoul(len)});
     }
-    if (g_tracks.empty()) logf(LOG_UNIMPL, "cd: no TOC at %s (run tools/rip_cd_audio.py); music disabled\n", path.c_str());
+    if (g_tracks.empty()) logf(LOG_UNIMPL, "cd: no CD audio at %s; music disabled\n", path.c_str());
 }
 
 static uint8_t bcd(unsigned v) { return (uint8_t)(((v / 10) << 4) | (v % 10)); }

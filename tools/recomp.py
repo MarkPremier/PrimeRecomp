@@ -509,6 +509,8 @@ def main():
             fh.write(f'#define PT_IMAGE_{k.upper()} 0x{m[k]:08X}u\n')
         fh.write('#define PT_IMAGE_APP_NAME "%s"  /* Mac name of the application file */\n'
                  % m['app_name'].replace('\\', '\\\\').replace('"', '\\"'))
+        fh.write(f'#define PT_IMAGE_SHA1 "{m["sha1"]}"  /* of its data fork: the code was translated from it */\n')
+        fh.write(f'#define PT_IMAGE_IMPORT_COUNT {len(m["imports"])}\n')
 
     print(f'functions: {len(bodies)} ({sum(1 for b in bodies if b[2])} named), '
           f'jump-table functions: {len(jt)}, files: {len(files)}')
