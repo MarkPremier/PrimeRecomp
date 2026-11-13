@@ -653,20 +653,27 @@ HLE(UpdateGWorld) {
     uint32_t old = ld32(ARG(0));
     Rect nb = read_rect(ARG(2));
     int depth = (int16_t)ARG(1);
+    /* depth 0 means the screen's depth now, which may have changed since the GWorld was made
+     * (switching to thousands/millions of colours in Preferences) */
+    int want = depth ? depth : screen().depth;
     if (old && is_gworld(old)) {
         Surface s = surface_of_port(old);
         Rect ob = s.bounds;
-        if ((depth == 0 || depth == s.depth) && ob.right - ob.left == nb.right - nb.left && ob.bottom - ob.top == nb.bottom - nb.top) {
+        if (want == s.depth && ob.right - ob.left == nb.right - nb.left && ob.bottom - ob.top == nb.bottom - nb.top) {
             RET(0);
             return;
         }
+        logf(LOG_GFX, "UpdateGWorld: %dx%d depth %d -> %dx%d depth %d\n", ob.right - ob.left, ob.bottom - ob.top, s.depth,
+             nb.right - nb.left, nb.bottom - nb.top, want);
     }
     uint32_t port = 0;
     int32_t err = make_gworld(port, depth, nb, ARG(3));
     if (err) { RET(err); return; }
     if (old) dispose_gworld(old);
     st32(ARG(0), port);
-    RET(1 << 1); /* reallocPix */
+    /* GWorldFlags of what changed: reallocPix (bit 20) | newDepth (bit 17). Both are above bit 15;
+     * the game truncates the result to a short and treats anything non-zero as an error. */
+    RET((1u << 20) | (1u << 17));
 }
 HLE(DisposeGWorld) { dispose_gworld(ARG(0)); }
 HLE(GetGWorld) {
