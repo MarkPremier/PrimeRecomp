@@ -150,22 +150,23 @@ absolute yaw/pitch action flags, which the engine still honours; a patch fixes
 the absolute-pitch decoding (see `PATCHES` in `tools/recomp.py`).
 "Mouse controls movement" is unchanged.
 
-**Frame rate** (`runtime/src/interp.cpp`). The world ticks at 30 Hz and the
-game draws once per tick (`idle_game_state`: `update_world`, then
-`render_screen` if it advanced). As in Aleph One, the tick rate stays and
-extra frames are drawn between ticks, up to the display's refresh rate: after
-each tick a hook on `render_screen` records the player's camera (position,
-polygon, facing, pitch); a hook at the top of `idle_game_state` blends it
-between the last two ticks, finds the eye's polygon with the engine's
-`find_new_object_polygon`, writes it into `world_view` and runs the tail of
-`render_screen` (`render_view`, `update_screen`), then restores `world_view`.
-Every frame, including the real one drawn as a tick arrives (the hook runs
-`render_screen`'s own body, `fn_010403D8_orig`, with the blended camera at t = 0
-in the player record for the call), comes from the same blend, so the view
-never jumps ahead and back. Game state is otherwise unchanged. Presents wait
-for vsync. Mouse turning is not blended but extrapolated
-from the turns already sent (so it adds no lag); big jumps snap. Objects still
-move at 30 Hz (stage 2 would interpolate them too).
+**Frame rate** (`runtime/src/interp.cpp`). The world ticks at 30 Hz (the
+heartbeat is a 33 ms Time Manager task) and the game draws once per tick
+(`idle_game_state`: `update_world`, then `render_screen` if it advanced). As in
+Aleph One, the tick rate stays and extra frames are drawn between ticks, up to
+the display's refresh rate. A hook on `render_screen` records the player's
+camera (position, polygon, facing, pitch) after each tick; every frame shows
+the camera blended at a moment 1.5 ticks behind a steady grid of when the ticks
+were due (ticks are processed up to ~10 ms late and unevenly; blending on
+processing times made motion uneven). A hook at the top of `idle_game_state`
+draws the extra frames: the blended camera (polygon found with the engine's
+`find_new_object_polygon`) goes into `world_view` for `render_view` and
+`update_screen`. The real frame runs `render_screen`'s own body
+(`fn_010403D8_orig`) with the blended camera briefly in the player record, so it
+fits the same sequence. Game state is otherwise unchanged. Presents wait for
+vsync. Mouse turning is not blended but extrapolated from the turns already
+sent (so it adds no lag); big jumps snap. Objects still move at 30 Hz (stage 2
+would interpolate them too).
 
 **Options** live in `primetarget.ini` beside the exe (written, commented out,
 on first run; `runtime/src/settings.cpp`); an environment variable `PT_` +

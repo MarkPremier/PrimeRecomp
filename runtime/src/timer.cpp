@@ -132,8 +132,12 @@ HLE(PrimeTime) {
     int32_t count = (int32_t)ARG(1);
     double delay = count >= 0 ? count * 1000.0 : -(double)count;
     double now = now_us();
-    /* extended tasks re-primed from their own callback keep a fixed period (tmWakeUp) */
-    if (t->extended && t->in_callback && t->last_due + delay > now - 100000.0) t->due_us = t->last_due + delay;
+    /* A task re-primed from its own callback counts from when it was due. Extended tasks do so
+     * by definition (tmWakeUp); a plain task counts from "now", which on the Mac is within
+     * microseconds of the deadline because the callback runs at interrupt time. Here callbacks
+     * run at the next safe point, a millisecond or two late, and counting from then slowed the
+     * game's 33 ms heartbeat (a plain InsTime task) to about 28.8 Hz. */
+    if (t->in_callback && t->last_due + delay > now - 100000.0) t->due_us = t->last_due + delay;
     else t->due_us = now + delay;
     t->primed = true;
     st16(ARG(0) + 4, ld16(ARG(0) + 4) | 0x8000);

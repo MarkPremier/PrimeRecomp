@@ -3,11 +3,13 @@
  * The world, and the view in it, advances 30 times a second; the game draws once
  * per tick (idle_game_state: update_world, then render_screen if it advanced).
  * Like Aleph One, this keeps the tick rate and draws extra frames in between:
- * the camera (position, polygon, facing, pitch) is blended between the last two
- * ticks and the view is drawn with the tail of render_screen (render_view +
- * update_screen). The blended camera only ever lives in world_view, which
- * render_screen rewrites on every real frame; game state is not touched. Monsters
- * and other objects still move at 30 Hz.
+ * the camera (position, polygon, facing, pitch) of the last few ticks is kept, and
+ * each frame shows it blended at a moment 1.5 ticks behind a steady 33 ms grid of
+ * when the ticks were due (not when each happened to be processed, which jitters).
+ * Extra frames are drawn with the tail of render_screen (render_view +
+ * update_screen) and the blended camera only in world_view; the real frame runs
+ * render_screen itself with the blended camera briefly in the player record.
+ * Monsters and other objects still move at 30 Hz.
  *
  * Options: interpolate = 0 turns it off (the original 30 fps); max_fps caps the
  * frame rate (default: the display's refresh rate).
@@ -45,7 +47,8 @@ constexpr uint32_t kPlCamXY = 0x30, kPlCamZ = 0x34, kPlCamPoly = 0x36, kPlYaw = 
 constexpr uint32_t kVwOriginXY = 0x18, kVwOriginZ = 0x1C, kVwYaw = 0x2A, kVwPitch = 0x2C, kVwTicks = 0x34,
                    kVwPoly = 0x38;
 
-constexpr double kTick = 1.0 / 30.0;
+/* the heartbeat: install_timer_task(30) primes its Time Manager task every 1000/30 = 33 ms */
+constexpr double kTick = 0.033;
 
 struct Camera {
     int16_t x = 0, y = 0, z = 0, poly = -1, yaw = 0, pitch = 0;
@@ -55,6 +58,55 @@ struct Camera {
 Camera g_prev, g_cur;
 bool g_have = false;
 clock_type::time_point g_tick_time, g_last_frame;
+
+/* When was world tick k due? base + k * kTick, base tracking the earliest each tick has been
+ * processed (ticks are noticed between frames, so a little late and unevenly). Blending on
+ * this grid rather than on when each tick happened to be processed keeps motion even. */
+double g_base = 0;
+bool g_have_base = false;
+
+double seconds(clock_type::time_point t) { return std::chrono::duration<double>(t.time_since_epoch()).count(); }
+
+void track_tick(uint32_t tick, clock_type::time_point at, bool snap) {
+    double obs = seconds(at) - tick * kTick;
+    if (!g_have_base || snap || obs < g_base || obs - g_base > 2 * kTick) g_base = obs;   /* (re)lock */
+    else g_base += 0.02 * (obs - g_base);                                                 /* drift */
+    g_have_base = true;
+}
+
+/* how far (0..1) from the previous tick's camera to the last one to show at time `at`: one
+ * and a half ticks behind the grid: ticks are processed up to ~10 ms after they are due, and
+ * the half tick keeps the shown moment short of the newest tick until it arrives (without it,
+ * frames held still and then jumped). Mouse turning doesn't wait for this; see blend(). */
+constexpr double kDelayTicks = 1.5;
+
+/* the cameras of the last few ticks, oldest first */
+Camera g_hist[4];
+int g_nhist = 0;
+
+void remember(const Camera &cam, bool snap) {
+    if (snap) g_nhist = 0;
+    if (g_nhist == 4) {
+        for (int i = 0; i < 3; i++) g_hist[i] = g_hist[i + 1];
+        g_nhist = 3;
+    }
+    g_hist[g_nhist++] = cam;
+}
+
+/* the two remembered cameras either side of the moment to show at `at`, and how far between */
+void bracket(clock_type::time_point at, Camera &a, Camera &b, double &f) {
+    double shown = (seconds(at) - g_base) / kTick - kDelayTicks;   /* in ticks */
+    a = b = g_hist[0];
+    f = 1.0;
+    for (int i = g_nhist - 2; i >= 0; i--)
+        if (shown >= g_hist[i].tick || i == 0) {
+            a = g_hist[i];
+            b = g_hist[i + 1];
+            f = (shown - a.tick) / (double)(b.tick - a.tick);
+            f = f < 0 ? 0 : f > 1 ? 1 : f;
+            return;
+        }
+}
 uint32_t g_tv_render_view, g_tv_update_screen, g_tv_find_polygon, g_points;
 
 bool enabled() {
@@ -120,35 +172,37 @@ void ensure_tvectors() {
     g_points = pt::sys_alloc(8);
 }
 
-/* The camera to show at fraction t (0..1) of the way from the previous tick to the last.
- * Every frame, the real one drawn as a tick arrives (t = 0) and those between, comes from
- * here, so the view moves steadily instead of jumping ahead and back each tick. */
-Camera blend(PPCContext *c, double t) {
+/* The camera to show at time `at`. Every frame, the real one drawn as a tick arrives and those
+ * between, comes from here, so the view moves steadily instead of jumping ahead and back. */
+Camera blend(PPCContext *c, clock_type::time_point at) {
     using namespace pt;
-    Camera cam = g_cur;
-    cam.x = (int16_t)lerp(g_prev.x, g_cur.x, t);
-    cam.y = (int16_t)lerp(g_prev.y, g_cur.y, t);
-    cam.z = (int16_t)lerp(g_prev.z, g_cur.z, t);
-    cam.pitch = (int16_t)lerp_angle(g_prev.pitch, g_cur.pitch, t);   /* an angle too: just below level is 511 */
-    /* Mouse turning isn't blended (that would show it a tick late): show the facing the
-     * world will reach once it runs the turns already on their way. Keys blend. */
+    Camera a, b;
+    double t;
+    bracket(at, a, b, t);
+    Camera cam = b;
+    cam.x = (int16_t)lerp(a.x, b.x, t);
+    cam.y = (int16_t)lerp(a.y, b.y, t);
+    cam.z = (int16_t)lerp(a.z, b.z, t);
+    cam.pitch = (int16_t)lerp_angle(a.pitch, b.pitch, t);   /* an angle too: just below level is 511 */
+    /* Mouse turning isn't blended (that would show it late): show the facing the world will
+     * reach once it runs the turns already on their way. Keys blend. */
     float pending;
     if (mouse_pending_yaw(pending) && g_cur.yaw >= 0 && g_cur.yaw < 512)
         cam.yaw = (int16_t)((g_cur.yaw + (int)lroundf(pending)) & 511);
     else
-        cam.yaw = (int16_t)lerp_angle(g_prev.yaw, g_cur.yaw, t);
+        cam.yaw = (int16_t)lerp_angle(a.yaw, b.yaw, t);
     /* the renderer starts from the polygon holding the eye */
-    if (cam.x == g_prev.x && cam.y == g_prev.y) {
-        cam.poly = g_prev.poly;
-    } else if (cam.x != g_cur.x || cam.y != g_cur.y) {
+    if (cam.x == a.x && cam.y == a.y) {
+        cam.poly = a.poly;
+    } else if (cam.x != b.x || cam.y != b.y) {
         ensure_tvectors();
-        st16(g_points, (uint16_t)g_cur.x);
-        st16(g_points + 2, (uint16_t)g_cur.y);
+        st16(g_points, (uint16_t)b.x);
+        st16(g_points + 2, (uint16_t)b.y);
         st16(g_points + 4, (uint16_t)cam.x);
         st16(g_points + 6, (uint16_t)cam.y);
-        uint32_t args[3] = {g_points, g_points + 4, (uint32_t)(int32_t)g_cur.poly};
+        uint32_t args[3] = {g_points, g_points + 4, (uint32_t)(int32_t)b.poly};
         int16_t poly = (int16_t)guest_call(c, g_tv_find_polygon, args, 3);
-        if (poly < 0) { cam.x = g_cur.x; cam.y = g_cur.y; cam.z = g_cur.z; }
+        if (poly < 0) { cam.x = b.x; cam.y = b.y; cam.z = b.z; cam.poly = b.poly; }
         else cam.poly = poly;
     }
     return cam;
@@ -157,7 +211,7 @@ Camera blend(PPCContext *c, double t) {
 }  // namespace
 
 /* every render_screen. After a world tick: remember where the camera was and is, and draw
- * this real frame with the blended camera (t = 0) put in the player record for the call. */
+ * this real frame with the blended camera put in the player record for the call. */
 extern "C" int pt_hook_render_screen(PPCContext *c) {
     using namespace pt;
     uint32_t p = ld32(kPlayerPtr);
@@ -170,9 +224,11 @@ extern "C" int pt_hook_render_screen(PPCContext *c) {
     g_cur = now;
     g_have = true;
     g_tick_time = g_last_frame = clock_type::now();
+    track_tick(now.tick, g_tick_time, snap);
+    remember(now, snap);
     if (!enabled()) return 0;
 
-    Camera cam = blend(c, 0.0);
+    Camera cam = blend(c, g_tick_time);
     uint8_t saved[0x10];
     memcpy(saved, g_mem + p + kPlCamXY, sizeof saved);   /* +0x30 .. +0x3F */
     st16(p + kPlCamXY, (uint16_t)cam.x);
@@ -198,9 +254,7 @@ extern "C" int pt_hook_idle_game_state(PPCContext *c) {
     uint32_t wv = ld32(kWorldViewPtr), bitmap = ld32(kBitmapPtr);
     if (!wv || !bitmap || ld16(kScreenMode + 2) != 0) return 0;   /* normal display only */
     ensure_tvectors();
-    double t = since_tick / kTick;
-    if (t > 1) t = 1;
-    Camera cam = blend(c, t);
+    Camera cam = blend(c, now);
 
     /* draw with the blended camera, then put world_view back as render_screen left it */
     uint8_t saved[0x3C];
