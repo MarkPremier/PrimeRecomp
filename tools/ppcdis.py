@@ -19,6 +19,7 @@ imports = {i['address']: i['name'] for i in im['imports']}
 toc = im['toc']
 
 md = capstone.Cs(capstone.CS_ARCH_PPC, capstone.CS_MODE_32 | capstone.CS_MODE_BIG_ENDIAN)
+md.skipdata = True   # keep going past words capstone cannot decode
 base = im['code_base']
 for ins in md.disasm(code[start - base:end - base], start):
     note = ''

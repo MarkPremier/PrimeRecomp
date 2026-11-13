@@ -12,6 +12,7 @@
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -35,6 +36,7 @@ static uint64_t g_last_present = 0;
 static std::deque<MacEvent> g_events;
 static uint8_t g_keys[16];
 static int g_mx = 320, g_my = 240;
+static std::atomic<int> g_dx_acc{0}, g_dy_acc{0};   /* raw motion since take_mouse_delta (mouse look) */
 static bool g_button = false;
 static int g_cursor_level = 0;     /* < 0 hidden */
 static bool g_obscured = false;
@@ -248,7 +250,16 @@ static void run_script() {
     uint64_t now = SDL_GetTicks64();
     while (g_script_pos < g_script.size() && g_script[g_script_pos].t <= now) {
         Scripted &x = g_script[g_script_pos++];
-        if (x.op == "move" || x.op == "click") { g_mx = x.a; g_my = x.b; }
+        if (x.op == "move" || x.op == "click") {
+            g_dx_acc += x.a - g_mx;
+            g_dy_acc += x.b - g_my;
+            g_mx = x.a;
+            g_my = x.b;
+        }
+        if (x.op == "nudge") {   /* relative motion, as a mouse in relative mode reports it */
+            g_dx_acc += x.a;
+            g_dy_acc += x.b;
+        }
         if (x.op == "click" || x.op == "down") { g_button = true; post_event({1, 0, ticks(), (int16_t)g_my, (int16_t)g_mx, modifiers()}); }
         if (x.op == "click" || x.op == "up") {
             if (x.op == "click") { g_button = false; post_event({2, 0, ticks(), (int16_t)g_my, (int16_t)g_mx, modifiers()}); }
@@ -303,6 +314,8 @@ void pump() {
             break;
         case SDL_KEYUP: key_event(ev.key, false); break;
         case SDL_MOUSEMOTION:
+            g_dx_acc += ev.motion.xrel;
+            g_dy_acc += ev.motion.yrel;
             if (g_relative) { g_mx += ev.motion.xrel; g_my += ev.motion.yrel; }
             else window_to_guest(ev.motion.x, ev.motion.y, g_mx, g_my);
             g_obscured = false;
@@ -354,6 +367,7 @@ void flush_events(uint16_t mask) {
 void key_map(uint8_t out[16]) { memcpy(out, g_keys, 16); }
 void mouse_global(int16_t &v, int16_t &h) { v = (int16_t)g_my; h = (int16_t)g_mx; }
 bool mouse_down() { return g_button; }
+void take_mouse_delta(int &dx, int &dy) { dx = g_dx_acc.exchange(0); dy = g_dy_acc.exchange(0); }
 
 void set_cursor(const uint8_t data[68]) { memcpy(g_cursor, data, 68); g_have_cursor = true; }
 void hide_cursor() { g_cursor_level--; }

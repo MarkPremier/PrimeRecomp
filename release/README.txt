@@ -65,6 +65,15 @@ Option. Alt+Enter toggles full screen.
 While the game window is active the mouse pointer stays inside it, as it did
 on the Mac's full screen. Alt+Tab to get the pointer back for other programs.
 
+Mouse look: Preferences > Controls > Mouse and Keyboard, "Mouse controls view".
+The original game turned the mouse into key presses (full-speed turning or
+none) and its up/down look flipped back and forth; this port drives the
+engine's smooth Marathon 2 mouse look instead. Pushing the mouse forward looks
+up. To change it, set these before starting the program:
+    PT_MOUSE_SPEED=1.5      faster (0.5 slower; default 1)
+    PT_MOUSE_INVERT=1       pushing forward looks down
+    PT_ORIGINAL_MOUSE=1     the original key-press behaviour
+
 Tip: Preferences > Graphics > Number of Colors > Thousands draws the game in
 16-bit colour instead of 256 colours.
 

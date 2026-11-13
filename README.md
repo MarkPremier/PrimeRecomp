@@ -142,6 +142,16 @@ Keys map to the Apple Extended Keyboard: Left Alt is Command, Right Alt /
 Windows is Option, Ctrl is Control. The game's default controls are
 Marathon's keypad layout (8/5 move, 4/6 turn), changeable in Preferences.
 
+**Mouse look** ("Mouse controls view"). Prime Target's `test_mouse` turned
+mouse movement into key flags once per 30 Hz tick (full-speed turn or none),
+and its vertical handling flip-flopped. The runtime hooks it
+(`runtime/src/hooks.cpp`) and sends the actual motion through Marathon 2's
+absolute yaw/pitch action flags, which the engine still honours; a patch fixes
+the absolute-pitch decoding (see `PATCHES` in `tools/recomp.py`).
+`PT_MOUSE_SPEED` scales it (default 1), `PT_MOUSE_INVERT=1` inverts up/down,
+`PT_ORIGINAL_MOUSE=1` restores the original behaviour. "Mouse controls
+movement" is unchanged.
+
 ### Debugging aids
 
 | Variable | Effect |
@@ -150,7 +160,7 @@ Marathon's keypad layout (8/5 move, 4/6 turn), changeable in Preferences.
 | `PT_WATCH` | comma list of guest function names to log on entry (with r3–r6 and LR) |
 | `PT_SHOT_DIR` | write a BMP screenshot every 2 s (plus palette statistics) |
 | `PT_RUN_SECONDS` | exit after N seconds (and report fatal errors on stderr only) |
-| `PT_INPUT` | scripted input: `"ms op args; ..."` with `move X Y`, `click X Y`, `down`, `up`, `key NAME`, `hold NAME`, `release NAME` (names: letters, `kp0`–`kp9`, arrows, `return`, `space`, `shift`, `ctrl`, `option`, `cmd`) |
+| `PT_INPUT` | scripted input: `"ms op args; ..."` with `move X Y`, `nudge DX DY` (relative motion, for mouse look), `click X Y`, `down`, `up`, `key NAME`, `hold NAME`, `release NAME` (names: letters, `kp0`–`kp9`, arrows, `return`, `space`, `shift`, `ctrl`, `option`, `cmd`) |
 | `PT_AUDIO_DUMP` | raw 44.1 kHz stereo s16 capture of the mixer output |
 
 On a crash the runtime prints the faulting guest address and the last 32

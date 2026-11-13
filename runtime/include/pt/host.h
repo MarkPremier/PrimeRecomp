@@ -24,6 +24,7 @@ void post_event(const MacEvent &e);
 void key_map(uint8_t out[16]);
 void mouse_global(int16_t &v, int16_t &h);
 bool mouse_down();
+void take_mouse_delta(int &dx, int &dy);   /* mouse motion (guest pixels) since the last call */
 uint16_t modifiers();
 
 /* cursor */
