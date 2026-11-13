@@ -12,6 +12,8 @@
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
 
+#include <algorithm>
+#include <cmath>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -31,12 +33,20 @@ const int kAudioRate = 44100;
 static SDL_Window *g_win;
 static SDL_Renderer *g_ren;
 static SDL_Texture *g_tex;
-static uint32_t g_rgba[640 * 480];
+/* Widescreen: the presented frame is g_w x 480, the 640x480 Mac screen in the middle and
+ * g_ext columns either side. The sides show the game's widened 3D view (widescreen.cpp
+ * fills g_side) while g_sides_live says so, and are black otherwise. */
+constexpr int kMaxW = 1000;   /* the renderer's scratch tables hold 1024 columns */
+static int g_w = 640, g_ext = 0;
+static uint32_t g_rgba[kMaxW * 480];
+static uint32_t g_side[480][2 * (kMaxW - 640) / 2 + 2];
+static bool (*g_sides_live)() = nullptr;
 static uint64_t g_last_present = 0;
 static std::deque<MacEvent> g_events;
 static uint8_t g_keys[16];
 static int g_mx = 320, g_my = 240;
 static std::atomic<int> g_dx_acc{0}, g_dy_acc{0};   /* raw motion since take_mouse_delta (mouse look) */
+static double g_mouse_div = 1.0;                     /* raw counts per guest pixel (init) */
 static bool g_button = false;
 static int g_cursor_level = 0;     /* < 0 hidden */
 static bool g_obscured = false;
@@ -124,11 +134,40 @@ uint16_t modifiers() {
 
 void init() {
     SDL_SetMainReady();
+    /* Mouse look takes raw motion: SDL would otherwise scale it by the window's size over the
+     * logical 480 lines, so turning got slower the bigger the window. It is scaled once, by the
+     * monitor's height over 480, so every window size turns as full screen does. */
+    SDL_SetHint(SDL_HINT_MOUSE_RELATIVE_SCALING, "0");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS | SDL_INIT_TIMER) != 0)
         fatal("SDL_Init: %s", SDL_GetError());
+    {
+        SDL_DisplayMode dm;
+        if (SDL_GetDesktopDisplayMode(0, &dm) == 0 && dm.h > 480) g_mouse_div = dm.h / 480.0;
+    }
     int scale = 2;
     if (const char *s = option("PT_SCALE")) scale = atoi(s) > 0 ? atoi(s) : 2;
-    g_win = SDL_CreateWindow("Prime Target", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 640 * scale, 480 * scale,
+    /* widescreen = auto (the monitor's shape; the default), 0 (the original 4:3), or a shape
+     * such as 16:9 or 1.6 */
+    {
+        double aspect = 0;
+        const char *ws = option("PT_WIDESCREEN");
+        std::string v = ws ? ws : "auto";
+        if (v == "0" || v == "off") aspect = 4.0 / 3;
+        else if (size_t colon = v.find(':'); colon != std::string::npos) {
+            double a = atof(v.c_str()), b = atof(v.c_str() + colon + 1);
+            aspect = a > 0 && b > 0 ? a / b : 0;
+        } else if (v != "auto" && v != "1") aspect = atof(v.c_str());
+        if (aspect <= 0) {
+            SDL_DisplayMode dm;
+            aspect = SDL_GetDesktopDisplayMode(0, &dm) == 0 && dm.h > 0 ? (double)dm.w / dm.h : 4.0 / 3;
+        }
+        int w = (int)(480 * aspect + 0.5);
+        w = w < 640 ? 640 : w > kMaxW ? kMaxW : w;
+        g_ext = (w - 640) / 2;
+        g_w = 640 + 2 * g_ext;
+        logf(LOG_GFX, "screen: %dx480 (aspect %.3f)\n", g_w, aspect);
+    }
+    g_win = SDL_CreateWindow("Prime Target", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, g_w * scale, 480 * scale,
                              SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
     if (!g_win) fatal("SDL_CreateWindow: %s", SDL_GetError());
     /* The game owned the whole screen on the Mac and draws its own pointer, so keep the
@@ -143,8 +182,8 @@ void init() {
     if (!g_ren) g_ren = SDL_CreateRenderer(g_win, -1, sync);
     if (!g_ren) g_ren = SDL_CreateRenderer(g_win, -1, 0);
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
-    SDL_RenderSetLogicalSize(g_ren, 640, 480);
-    g_tex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, 640, 480);
+    SDL_RenderSetLogicalSize(g_ren, g_w, 480);
+    g_tex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, g_w, 480);
     SDL_ShowCursor(SDL_DISABLE);
 
     SDL_AudioSpec want{}, have{};
@@ -200,10 +239,10 @@ static void set_relative(bool on) {
     logf(LOG_EVT, "relative mouse %s\n", on ? "on" : "off");
 }
 
-/* SDL's renderer already rewrites mouse event coordinates into the 640x480 logical
- * space (SDL_RenderSetLogicalSize), so they are guest coordinates as they come */
+/* SDL's renderer already rewrites mouse event coordinates into the g_w x 480 logical
+ * space (SDL_RenderSetLogicalSize); the Mac screen starts g_ext columns in */
 static void window_to_guest(int wx, int wy, int &gx, int &gy) {
-    gx = wx;
+    gx = wx - g_ext;
     gy = wy;
 }
 
@@ -257,14 +296,14 @@ static void run_script() {
     while (g_script_pos < g_script.size() && g_script[g_script_pos].t <= now) {
         Scripted &x = g_script[g_script_pos++];
         if (x.op == "move" || x.op == "click") {
-            g_dx_acc += x.a - g_mx;
-            g_dy_acc += x.b - g_my;
+            g_dx_acc += (int)lround((x.a - g_mx) * g_mouse_div);
+            g_dy_acc += (int)lround((x.b - g_my) * g_mouse_div);
             g_mx = x.a;
             g_my = x.b;
         }
-        if (x.op == "nudge") {   /* relative motion, as a mouse in relative mode reports it */
-            g_dx_acc += x.a;
-            g_dy_acc += x.b;
+        if (x.op == "nudge") {   /* relative motion in guest pixels, as raw mouse counts */
+            g_dx_acc += (int)lround(x.a * g_mouse_div);
+            g_dy_acc += (int)lround(x.b * g_mouse_div);
         }
         if (x.op == "click" || x.op == "down") { g_button = true; post_event({1, 0, ticks(), (int16_t)g_my, (int16_t)g_mx, modifiers()}); }
         if (x.op == "click" || x.op == "up") {
@@ -372,8 +411,19 @@ void flush_events(uint16_t mask) {
 void key_map(uint8_t out[16]) { memcpy(out, g_keys, 16); }
 void mouse_global(int16_t &v, int16_t &h) { v = (int16_t)g_my; h = (int16_t)g_mx; }
 bool mouse_down() { return g_button; }
-void take_mouse_delta(int &dx, int &dy) { dx = g_dx_acc.exchange(0); dy = g_dy_acc.exchange(0); }
-void peek_mouse_delta(int &dx, int &dy) { dx = g_dx_acc.load(); dy = g_dy_acc.load(); }
+/* raw counts to guest pixels (see init), keeping the remainder for next time */
+static double g_rem_x = 0, g_rem_y = 0;
+void take_mouse_delta(int &dx, int &dy) {
+    double x = g_dx_acc.exchange(0) / g_mouse_div + g_rem_x, y = g_dy_acc.exchange(0) / g_mouse_div + g_rem_y;
+    dx = (int)x;
+    dy = (int)y;
+    g_rem_x = x - dx;
+    g_rem_y = y - dy;
+}
+void peek_mouse_delta(int &dx, int &dy) {
+    dx = (int)(g_dx_acc.load() / g_mouse_div + g_rem_x);
+    dy = (int)(g_dy_acc.load() / g_mouse_div + g_rem_y);
+}
 static bool g_fake_fullscreen = false;   /* PT_NO_FULLSCREEN (tests): decisions only */
 bool is_fullscreen() {
     if (getenv("PT_NO_FULLSCREEN")) return g_fake_fullscreen;
@@ -385,6 +435,9 @@ void set_fullscreen(bool on) {
     if (getenv("PT_NO_FULLSCREEN")) { g_fake_fullscreen = on; return; }
     SDL_SetWindowFullscreen(g_win, on ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
 }
+int side_width() { return g_ext; }
+uint32_t *side_row(int y) { return y >= 0 && y < 480 ? g_side[y] : nullptr; }
+void set_sides_live(bool (*fn)()) { g_sides_live = fn; }
 int refresh_rate() {
     SDL_DisplayMode m;
     int d = g_win ? SDL_GetWindowDisplayIndex(g_win) : 0;
@@ -415,26 +468,40 @@ void present(bool force) {
             lut[i] = 0xFF000000u | (uint32_t)(c.r >> 8) << 16 | (uint32_t)(c.g >> 8) << 8 | (c.b >> 8);
         }
         for (int y = 0; y < 480; y++)
-            for (int x = 0; x < 640; x++) g_rgba[y * 640 + x] = lut[fb[y * sc.row_bytes + x]];
+            for (int x = 0; x < 640; x++) g_rgba[y * g_w + g_ext + x] = lut[fb[y * sc.row_bytes + x]];
     } else if (sc.depth == 16) {
         for (int y = 0; y < 480; y++)
             for (int x = 0; x < 640; x++) {
                 uint32_t v = (uint32_t)fb[y * sc.row_bytes + 2 * x] << 8 | fb[y * sc.row_bytes + 2 * x + 1];
                 uint32_t r = (v >> 10) & 31, g = (v >> 5) & 31, b = v & 31;
-                g_rgba[y * 640 + x] = 0xFF000000u | (r << 19 | (r >> 2) << 16) | (g << 11 | (g >> 2) << 8) | (b << 3 | b >> 2);
+                g_rgba[y * g_w + g_ext + x] = 0xFF000000u | (r << 19 | (r >> 2) << 16) | (g << 11 | (g >> 2) << 8) | (b << 3 | b >> 2);
             }
     } else if (sc.depth == 32) {
         for (int y = 0; y < 480; y++)
             for (int x = 0; x < 640; x++) {
                 const uint8_t *p = fb + y * sc.row_bytes + 4 * x;
-                g_rgba[y * 640 + x] = 0xFF000000u | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
+                g_rgba[y * g_w + g_ext + x] = 0xFF000000u | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
             }
     } else {
         for (int y = 0; y < 480; y++)
             for (int x = 0; x < 640; x++) {
                 int bit = (fb[y * sc.row_bytes + (x * sc.depth >> 3)] >> (8 - sc.depth - (x * sc.depth & 7))) & ((1 << sc.depth) - 1);
-                g_rgba[y * 640 + x] = bit ? 0xFF000000u : 0xFFFFFFFFu;
+                g_rgba[y * g_w + g_ext + x] = bit ? 0xFF000000u : 0xFFFFFFFFu;
             }
+    }
+    /* the widescreen sides: the game's widened 3D view, or black */
+    if (g_ext) {
+        bool live = g_sides_live && g_sides_live();
+        for (int y = 0; y < 480; y++) {
+            uint32_t *row = g_rgba + y * g_w;
+            if (live) {
+                memcpy(row, g_side[y], g_ext * 4);
+                memcpy(row + g_ext + 640, g_side[y] + g_ext, g_ext * 4);
+            } else {
+                std::fill(row, row + g_ext, 0xFF000000u);
+                std::fill(row + g_ext + 640, row + g_w, 0xFF000000u);
+            }
+        }
     }
     /* composite the Mac cursor */
     if (g_have_cursor && g_cursor_level >= 0 && !g_obscured) {
@@ -446,7 +513,7 @@ void present(bool force) {
                 int px = g_mx - hx + x, py = g_my - hy + y;
                 if (px < 0 || px >= 640 || py < 0 || py >= 480) continue;
                 bool db = (d >> (15 - x)) & 1, mb = (m >> (15 - x)) & 1;
-                uint32_t &o = g_rgba[py * 640 + px];
+                uint32_t &o = g_rgba[py * g_w + g_ext + px];
                 if (mb) o = db ? 0xFF000000u : 0xFFFFFFFFu;
                 else if (db) o ^= 0x00FFFFFFu;
             }
@@ -460,7 +527,7 @@ void present(bool force) {
     static const uint64_t shot_ms = getenv("PT_SHOT_MS") ? (uint64_t)atoi(getenv("PT_SHOT_MS")) : 2000;
     if (shot_dir && now - last_shot >= shot_ms) {
         last_shot = now;
-        SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormatFrom(g_rgba, 640, 480, 32, 640 * 4, SDL_PIXELFORMAT_ARGB8888);
+        SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormatFrom(g_rgba, g_w, 480, 32, g_w * 4, SDL_PIXELFORMAT_ARGB8888);
         char path[512];
         snprintf(path, sizeof path, "%s/shot_%03d.bmp", shot_dir, shot_n++);
         SDL_SaveBMP(surf, path);
@@ -480,7 +547,7 @@ void present(bool force) {
         }
     }
     if (run_secs && now > (uint64_t)atoi(run_secs) * 1000) { SDL_Quit(); std::_Exit(0); }
-    SDL_UpdateTexture(g_tex, nullptr, g_rgba, 640 * 4);
+    SDL_UpdateTexture(g_tex, nullptr, g_rgba, g_w * 4);
     SDL_RenderClear(g_ren);
     SDL_RenderCopy(g_ren, g_tex, nullptr, nullptr);
     SDL_RenderPresent(g_ren);

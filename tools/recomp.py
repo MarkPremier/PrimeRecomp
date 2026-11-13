@@ -67,6 +67,11 @@ HOOKS = {
         0x0101E28C: 'pt_hook_test_mouse',        # smooth mouse look ("mouse controls view")
         0x010403D8: 'pt_hook_render_screen',     # interp.cpp: camera after each tick
         0x0100D2D0: 'pt_hook_idle_game_state',   # interp.cpp: blended frames between ticks
+        0x0103E9B0: 'pt_hook_calc_dest_frame',   # widescreen.cpp: widen the 3D view's frame
+        0x01031528: 'pt_hook_init_view_data',    # widescreen.cpp: keep the scale, widen the cone
+        0x01041A24: 'pt_hook_update_screen',     # widescreen.cpp: the columns beside the window
+        0x0103EF64: 'pt_hook_darken_world_window',
+        0x01040D64: 'pt_hook_blackout_world_window',
     },
 }
 

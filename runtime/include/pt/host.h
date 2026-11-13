@@ -27,6 +27,12 @@ bool mouse_down();
 void take_mouse_delta(int &dx, int &dy);   /* mouse motion (guest pixels) since the last call */
 void peek_mouse_delta(int &dx, int &dy);   /* the same, without taking it */
 int refresh_rate();                        /* the window's display, in Hz */
+/* widescreen: the presented frame has side_width() extra columns each side of the Mac screen;
+ * side_row(y) holds them (left side_width() pixels, then the right ones, 0xAARRGGBB), shown
+ * while the function given to set_sides_live returns true */
+int side_width();
+uint32_t *side_row(int y);
+void set_sides_live(bool (*fn)());
 bool is_fullscreen();                      /* the window covers its monitor */
 void set_fullscreen(bool on);
 uint16_t modifiers();

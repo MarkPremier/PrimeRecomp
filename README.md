@@ -170,16 +170,38 @@ draws the extra frames: the blended camera (polygon found with the engine's
 (`fn_010403D8_orig`) with the blended camera briefly in the player record, so it
 fits the same sequence. Game state is otherwise unchanged. Presents wait for
 vsync. Mouse turning is not blended but extrapolated from the turns already
-sent (so it adds no lag); big jumps snap. Objects still move at 30 Hz (stage 2
-would interpolate them too). The in-game switch is a "Smooth Motion" checkbox the
+sent (so it adds no lag); a move faster than half a world unit a tick (Aleph
+One's limit) restarts the history. The world is blended too, as in Aleph One's
+`interpolated_world.cpp`: each tick also snapshots polygon floor/ceiling heights
+(polygons at [0x11444A4], 0x84 bytes, +0x30/+0x32), the lines' adjacent
+heights ([0x114449C], 32 bytes, +8/+0xA), sides' primary texture y0
+([0x11444A0], 0x46 bytes, +6) and the 384 objects' locations ([0x11444B0],
+0x32 bytes, flags +0xE); each frame writes the values blended at the camera's
+moment (objects only within a speed limit, keeping their live polygon) and
+undoes them after drawing. The in-game switch is a "Smooth Motion" checkbox the
 runtime adds to the Graphics pane (DITL 4001, `patch_ditl` in `dialogs.cpp`);
 the dialog code handles it itself and saves `interpolate` on OK.
+
+**Widescreen** (`runtime/src/widescreen.cpp`). The Mac screen stays 640x480;
+the host presents extra columns either side (`widescreen`: the monitor's shape
+by default, at most 1000 wide because the renderer's scratch tables in
+`allocate_texture_tables` hold 1024 columns). For Window Size Full Screen and
+100% at high resolution a hook widens `calculate_destination_frame`'s rectangle
+by those columns; the world GWorld, the view's `screen_width` and the renderer
+follow. `update_screen`'s CopyBits to the window clips to the middle, and a hook
+copies the GWorld's outer columns to the host just before it. A hook after
+`initialize_view_data` keeps the original's scale for the middle 640 columns
+(its `asin(width * sin(half_cone) / standard_width)` bends wider views) and
+widens `half_cone` to the extra columns. `darken_world_window` and
+`blackout_world_window` are followed on the sides. Mouse look reads raw motion
+(`SDL_HINT_MOUSE_RELATIVE_SCALING` 0) scaled by the monitor height / 480, so
+the turning speed no longer depends on the window size.
 
 **Options** live in `primetarget.ini` beside the exe (written, commented out,
 on first run; `runtime/src/settings.cpp`); an environment variable `PT_` +
 the key in capitals overrides each: `mouse_speed` (default 1), `mouse_invert`,
 `mouse_lock_y` (the mouse only turns), `original_mouse`, `interpolate`, `vsync`, `fullscreen`
-(default 1), `max_fps` (default: the display's), `scale`, `mouse_grab`.
+(default 1), `max_fps` (default: the display's), `widescreen`, `scale`, `mouse_grab`.
 
 ### Debugging aids
 

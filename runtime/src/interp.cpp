@@ -14,11 +14,14 @@
  * Options: interpolate = 0 turns it off (the original 30 fps); max_fps caps the
  * frame rate (default: the display's refresh rate).
  */
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
+#include <vector>
 
 #include "image_info.h"
 #include "ppc_funcs.h"
@@ -86,32 +89,149 @@ void track_tick(uint32_t tick, clock_type::time_point at, bool snap) {
  * frames held still and then jumped). Mouse turning doesn't wait for this; see blend(). */
 constexpr double kDelayTicks = 1.5;
 
-/* the cameras of the last few ticks, oldest first */
+/* The world as the renderer sees it, per tick (stage 2, as Aleph One's interpolated_world):
+ * platform floor/ceiling heights (polygons), the lines' adjacent heights the renderer clips
+ * with, wall texture offsets that ride platforms (sides' primary y0), and object positions. */
+constexpr uint32_t kPolygonsPtr = 0x011444A4, kLinesPtr = 0x0114449C, kSidesPtr = 0x011444A0, kObjectsPtr = 0x011444B0;
+constexpr uint32_t kDwLineCount = 0x22, kDwSideCount = 0x24, kDwPolygonCount = 0x26;
+constexpr int kMaxObjects = 384;   /* MAXIMUM_OBJECTS_PER_MAP (recalculate_map_counts); the count field is only set for saving */
+constexpr uint32_t kPolyStride = 0x84, kPolyFloor = 0x30, kPolyCeiling = 0x32;
+constexpr uint32_t kLineStride = 0x20, kLineFloor = 0x08, kLineCeiling = 0x0A;
+constexpr uint32_t kSideStride = 0x46, kSideY0 = 0x06;
+constexpr uint32_t kObjStride = 0x32, kObjFlags = 0x0E;   /* location x,y,z at +0; flags: 0x8000 used, & 7 owner */
+constexpr int kOwnerProjectile = 3;
+constexpr int kSpeedLimit = 512, kProjectileSpeedLimit = 1024;   /* world units per tick, as Aleph One */
+
+struct WorldSnap {
+    std::vector<int16_t> poly, line, side, obj;   /* poly/line: 2 per entry; obj: x, y, z, flags */
+};
+
+void snapshot(WorldSnap &w) {
+    using namespace pt;
+    uint32_t dw = ld32(kDynamicWorldPtr);
+    auto grab = [](std::vector<int16_t> &out, uint32_t base_ptr, int count, uint32_t stride,
+                   std::initializer_list<uint32_t> fields) {
+        out.clear();
+        uint32_t base = ld32(base_ptr);
+        if (!base || count <= 0 || count > 32768) return;
+        out.reserve(count * fields.size());
+        for (int i = 0; i < count; i++)
+            for (uint32_t f : fields) out.push_back((int16_t)ld16(base + i * stride + f));
+    };
+    grab(w.poly, kPolygonsPtr, (int16_t)ld16(dw + kDwPolygonCount), kPolyStride, {kPolyFloor, kPolyCeiling});
+    grab(w.line, kLinesPtr, (int16_t)ld16(dw + kDwLineCount), kLineStride, {kLineFloor, kLineCeiling});
+    grab(w.side, kSidesPtr, (int16_t)ld16(dw + kDwSideCount), kSideStride, {kSideY0});
+    grab(w.obj, kObjectsPtr, kMaxObjects, kObjStride, {0, 2, 4, kObjFlags});
+}
+
+/* the cameras (and worlds) of the last few ticks, oldest first */
 Camera g_hist[4];
+WorldSnap g_whist[4];
 int g_nhist = 0;
 
 void remember(const Camera &cam, bool snap) {
     if (snap) g_nhist = 0;
     if (g_nhist == 4) {
         for (int i = 0; i < 3; i++) g_hist[i] = g_hist[i + 1];
+        std::rotate(g_whist, g_whist + 1, g_whist + 4);
         g_nhist = 3;
+    }
+    snapshot(g_whist[g_nhist]);
+    if (snap) {
+        const WorldSnap &w = g_whist[g_nhist];
+        int used = 0;
+        for (size_t i = 0; i + 3 < w.obj.size(); i += 4) used += ((uint16_t)w.obj[i + 3] & 0x8000) != 0;
+        pt::logf(pt::LOG_GFX, "interp: world %zu polygons, %zu lines, %zu sides, %d of %zu objects in use\n",
+                 w.poly.size() / 2, w.line.size() / 2, w.side.size(), used, w.obj.size() / 4);
     }
     g_hist[g_nhist++] = cam;
 }
 
-/* the two remembered cameras either side of the moment to show at `at`, and how far between */
-void bracket(clock_type::time_point at, Camera &a, Camera &b, double &f) {
+/* the two remembered ticks either side of the moment to show at `at`, and how far between */
+void bracket(clock_type::time_point at, int &ia, int &ib, double &f) {
     double shown = (seconds(at) - g_base) / kTick - kDelayTicks;   /* in ticks */
-    a = b = g_hist[0];
+    ia = ib = 0;
     f = 1.0;
     for (int i = g_nhist - 2; i >= 0; i--)
         if (shown >= g_hist[i].tick || i == 0) {
-            a = g_hist[i];
-            b = g_hist[i + 1];
-            f = (shown - a.tick) / (double)(b.tick - a.tick);
+            ia = i;
+            ib = i + 1;
+            f = (shown - g_hist[i].tick) / (double)(g_hist[i + 1].tick - g_hist[i].tick);
             f = f < 0 ? 0 : f > 1 ? 1 : f;
             return;
         }
+}
+void bracket(clock_type::time_point at, Camera &a, Camera &b, double &f) {
+    int ia, ib;
+    bracket(at, ia, ib, f);
+    a = g_hist[ia];
+    b = g_hist[ib];
+}
+
+/* Put the world blended at `at` into guest memory for one frame; restore_world() undoes it.
+ * Only values that differ from the live (newest) state are written. */
+struct Undo { uint32_t addr; uint16_t value; };
+std::vector<Undo> g_undo;
+
+void put16(uint32_t addr, int v) {
+    g_undo.push_back({addr, ld16(addr)});
+    st16(addr, (uint16_t)(int16_t)v);
+}
+
+void blend_world(clock_type::time_point at) {
+    using namespace pt;
+    g_undo.clear();
+    if (g_nhist < 2) return;
+    int ia, ib;
+    double t;
+    bracket(at, ia, ib, t);
+    const WorldSnap &A = g_whist[ia], &B = g_whist[ib], &L = g_whist[g_nhist - 1];
+    auto lerp16 = [](int a, int b, double f) { return a + (int)lround((b - a) * f); };
+    auto heights = [&](const std::vector<int16_t> &a, const std::vector<int16_t> &b, const std::vector<int16_t> &l,
+                       uint32_t base_ptr, uint32_t stride, std::initializer_list<uint32_t> fields) {
+        size_t nf = fields.size();
+        if (a.size() != l.size() || b.size() != l.size() || !nf) return;
+        uint32_t base = ld32(base_ptr);
+        if (!base) return;
+        for (size_t i = 0; i < l.size(); i++) {
+            if (a[i] == l[i] && b[i] == l[i]) continue;
+            int v = lerp16(a[i], b[i], t);
+            if (v != l[i]) put16(base + (uint32_t)(i / nf) * stride + *(fields.begin() + i % nf), v);
+        }
+    };
+    heights(A.poly, B.poly, L.poly, kPolygonsPtr, kPolyStride, {kPolyFloor, kPolyCeiling});
+    heights(A.line, B.line, L.line, kLinesPtr, kLineStride, {kLineFloor, kLineCeiling});
+    heights(A.side, B.side, L.side, kSidesPtr, kSideStride, {kSideY0});
+    /* objects: those in all three ticks, moving no faster than a limit (else they teleported,
+     * or the slot was reused); their polygon stays the live one, as in Aleph One */
+    if (A.obj.size() == L.obj.size() && B.obj.size() == L.obj.size()) {
+        uint32_t base = ld32(kObjectsPtr);
+        for (size_t i = 0; base && i + 3 < L.obj.size(); i += 4) {
+            uint16_t fa = (uint16_t)A.obj[i + 3], fb = (uint16_t)B.obj[i + 3], fl = (uint16_t)L.obj[i + 3];
+            if (!(fa & fb & fl & 0x8000) || (fa & 7) != (fl & 7) || (fb & 7) != (fl & 7)) continue;
+            if (A.obj[i] == L.obj[i] && A.obj[i + 1] == L.obj[i + 1] && A.obj[i + 2] == L.obj[i + 2] &&
+                B.obj[i] == L.obj[i] && B.obj[i + 1] == L.obj[i + 1] && B.obj[i + 2] == L.obj[i + 2])
+                continue;   /* not moving */
+            int limit = (fl & 7) == kOwnerProjectile ? kProjectileSpeedLimit : kSpeedLimit;
+            auto far = [&](const std::vector<int16_t> &p, const std::vector<int16_t> &q, int lim) {
+                return std::abs(p[i] - q[i]) + std::abs(p[i + 1] - q[i + 1]) > lim || std::abs(p[i + 2] - q[i + 2]) > lim;
+            };
+            if (far(A.obj, B.obj, limit) || far(B.obj, L.obj, limit * 3)) continue;
+            uint32_t o = base + (uint32_t)(i / 4) * kObjStride;
+            for (int k = 0; k < 3; k++) {
+                int v = lerp16(A.obj[i + k], B.obj[i + k], t);
+                if (v != L.obj[i + k]) put16(o + 2 * k, v);
+            }
+        }
+    }
+}
+
+size_t g_blended_values = 0;   /* for the log: world values blended in the last frame */
+
+void restore_world() {
+    g_blended_values += g_undo.size();
+    for (auto it = g_undo.rbegin(); it != g_undo.rend(); ++it) st16(it->addr, it->value);
+    g_undo.clear();
 }
 uint32_t g_tv_render_view, g_tv_update_screen, g_tv_find_polygon, g_points;
 
@@ -259,8 +379,12 @@ extern "C" int pt_hook_render_screen(PPCContext *c) {
     uint32_t p = ld32(kPlayerPtr);
     if ((int16_t)c->r[3] <= 0 || !p) return 0;
     Camera now = read_camera();
-    bool snap = !g_have || now.tick < g_cur.tick || now.tick - g_cur.tick > 4 ||
-                std::abs(now.x - g_cur.x) + std::abs(now.y - g_cur.y) > 2048 || std::abs(now.z - g_cur.z) > 1024;
+    /* a jump (teleport, new level) starts the history again rather than blending across it:
+     * faster than Aleph One's half a world unit a tick */
+    int dt = (int)(now.tick - g_cur.tick);
+    bool snap = !g_have || now.tick < g_cur.tick || dt > 4 ||
+                std::abs(now.x - g_cur.x) + std::abs(now.y - g_cur.y) > kSpeedLimit * dt ||
+                std::abs(now.z - g_cur.z) > kSpeedLimit * dt;
     mouse_ticks_simulated((int16_t)c->r[3]);
     g_prev = snap ? now : g_cur;
     g_cur = now;
@@ -282,7 +406,9 @@ extern "C" int pt_hook_render_screen(PPCContext *c) {
     st16(p + kPlPitch, (uint16_t)cam.pitch);
     uint32_t step = ld32(p + kPlStepPhase);
     st32(p + kPlStepPhase, (uint32_t)cam.step);
+    blend_world(g_tick_time);
     fn_010403D8_orig(c);
+    restore_world();
     frame_log('R', g_tick_time, cam);
     memcpy(g_mem + p + kPlCamXY, saved, sizeof saved);
     st32(p + kPlStepPhase, step);
@@ -327,9 +453,11 @@ extern "C" int pt_hook_idle_game_state(PPCContext *c) {
     st32(wv + kVwTicks, 0);
     uint32_t p = ld32(kPlayerPtr), step = ld32(p + kPlStepPhase);
     st32(p + kPlStepPhase, (uint32_t)cam.step);   /* the weapon's bob */
+    blend_world(now);   /* platforms and objects */
     uint32_t args[2] = {wv, bitmap};
     guest_call(c, g_tv_render_view, args, 2);
     guest_call(c, g_tv_update_screen, nullptr, 0);
+    restore_world();
     frame_log('B', now, cam);
     memcpy(g_mem + wv, saved, sizeof saved);
     st32(p + kPlStepPhase, step);
@@ -337,7 +465,9 @@ extern "C" int pt_hook_idle_game_state(PPCContext *c) {
     static unsigned frames = 0;
     static uint32_t first_tick = g_cur.tick;
     if (++frames % 300 == 0)
-        logf(LOG_GFX, "interp: %u blended frames over %u ticks; camera %d,%d,%d poly %d yaw %d pitch %d\n", frames,
-             g_cur.tick - first_tick, g_cur.x, g_cur.y, g_cur.z, g_cur.poly, g_cur.yaw, g_cur.pitch);
+        logf(LOG_GFX, "interp: %u blended frames over %u ticks; camera %d,%d,%d poly %d yaw %d pitch %d; %zu world values\n",
+             frames, g_cur.tick - first_tick, g_cur.x, g_cur.y, g_cur.z, g_cur.poly, g_cur.yaw, g_cur.pitch,
+             g_blended_values);
+        if (frames % 300 == 0) g_blended_values = 0;
     return 0;
 }

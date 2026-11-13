@@ -84,11 +84,22 @@ none) and its up/down look flipped back and forth; this port drives the
 engine's smooth Marathon 2 mouse look instead. Pushing the mouse forward looks
 up.
 
+Mouse look turns at the same speed whatever the window size (the speed it has
+full screen).
+
 Frame rate: the game world runs 30 times a second, as on the Mac. The port
 draws extra frames in between (up to your display's refresh rate) with the
-camera blended between updates, so turning and moving look smooth; monsters
-and other objects still move 30 times a second. Preferences > Graphics >
-Smooth Motion switches between this and the original 30 frames per second.
+camera, doors, lifts, monsters and other moving things blended between
+updates, as Aleph One does, so everything moves smoothly. Preferences >
+Graphics > Smooth Motion switches between this and the original 30 frames per
+second.
+
+Widescreen: on a wide monitor the 3D view is widened to fill it (you see
+more to the sides; the middle looks exactly as before). Menus, dialogs and
+the control panel stay 4:3 in the middle. It works with Window Size "Full
+Screen" and "100%" at high resolution; the widest is about 2:1, so an
+ultrawide monitor keeps narrow bars. widescreen = 0 in primetarget.ini gives
+the original 4:3.
 
 
 OPTIONS
@@ -106,7 +117,9 @@ of a line to change that option:
                             Smooth Motion checkbox in Preferences > Graphics)
     max_fps = 60            cap the frame rate (default: the display's)
     vsync = 0               don't wait for the display's refresh (may tear)
-    scale = 3               a bigger window (640x480 times this; default 2)
+    widescreen = 0          the original 4:3 view (or a shape, e.g. 16:9;
+                            default: the monitor's)
+    scale = 3               a bigger window (480 lines times this; default 2)
     mouse_grab = 0          let the pointer leave the window
     fullscreen = 1          start filling the monitor
 

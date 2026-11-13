@@ -29,6 +29,7 @@ void set_option(const char *env_name, const char *value);   /* and save it to pr
 /* high frame rate (interp.cpp): the in-game "Smooth Motion" setting */
 bool interpolation_enabled();
 void set_interpolation(bool on);
+void init_widescreen();   /* widescreen.cpp: the host shows the widened 3D view beside the screen */
 
 /* ---------- guest memory ---------- */
 void mem_init();

@@ -182,6 +182,7 @@ int main(int argc, char **argv) {
     lowmem_init();
     res::init();
     host::init();
+    init_widescreen();
     snd::init();
     start_interrupt_clock();
 
