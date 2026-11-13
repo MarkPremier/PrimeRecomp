@@ -11,6 +11,7 @@
 #include "pt/vfs.h"
 
 namespace fs = std::filesystem;
+namespace pt::dlg { void patch_ditl(int16_t id, std::vector<uint8_t> &ditl); }
 using namespace pt;
 using namespace pt::vfs;
 
@@ -148,6 +149,8 @@ static int16_t open_res_file(const fs::path &host, bool writable) {
     rf.host = host;
     rf.writable = writable;
     if (!parse_fork(bytes, rf.res)) return -199; /* mapReadErr */
+    for (auto &x : rf.res)   /* the port's own setting in the Preferences dialog (dialogs.cpp) */
+        if (x.type == 'DITL') dlg::patch_ditl(x.id, x.data);
     logf(LOG_RES, "res: opened %s (%zu resources) as %d\n", host.u8string().c_str(), rf.res.size(), rf.ref);
     g_chain.insert(g_chain.begin(), std::move(rf));
     g_cur = g_chain.front().ref;

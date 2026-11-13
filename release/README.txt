@@ -73,8 +73,9 @@ up.
 
 Frame rate: the game world runs 30 times a second, as on the Mac. The port
 draws extra frames in between (up to your display's refresh rate) with the
-camera blended between the last two updates, so turning and moving look
-smooth; monsters and other objects still move 30 times a second.
+camera blended between updates, so turning and moving look smooth; monsters
+and other objects still move 30 times a second. Preferences > Graphics >
+Smooth Motion switches between this and the original 30 frames per second.
 
 
 OPTIONS
@@ -88,7 +89,8 @@ of a line to change that option:
     mouse_lock_y = 1        the mouse only turns left and right; look up and
                             down with the keys
     original_mouse = 1      the original game's key-press mouse
-    interpolate = 0         the original 30 frames per second
+    interpolate = 0         the original 30 frames per second (also the
+                            Smooth Motion checkbox in Preferences > Graphics)
     max_fps = 60            cap the frame rate (default: the display's)
     vsync = 0               don't wait for the display's refresh (may tear)
     scale = 3               a bigger window (640x480 times this; default 2)

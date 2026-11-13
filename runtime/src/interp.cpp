@@ -109,12 +109,14 @@ void bracket(clock_type::time_point at, Camera &a, Camera &b, double &f) {
 }
 uint32_t g_tv_render_view, g_tv_update_screen, g_tv_find_polygon, g_points;
 
+int g_enabled = -1;   /* from the interpolate option; Preferences > Graphics > Smooth Motion */
+
 bool enabled() {
-    static const bool on = [] {
+    if (g_enabled < 0) {
         const char *v = pt::option("PT_INTERPOLATE");
-        return !(v && *v == '0');
-    }();
-    return on;
+        g_enabled = !(v && *v == '0');
+    }
+    return g_enabled != 0;
 }
 
 double frame_interval() {
@@ -209,6 +211,15 @@ Camera blend(PPCContext *c, clock_type::time_point at) {
 }
 
 }  // namespace
+
+namespace pt {
+bool interpolation_enabled() { return enabled(); }
+void set_interpolation(bool on) {
+    g_enabled = on;
+    set_option("PT_INTERPOLATE", on ? "1" : "0");
+    logf(LOG_GFX, "interp: smooth motion %s\n", on ? "on" : "off");
+}
+}  // namespace pt
 
 /* every render_screen. After a world tick: remember where the camera was and is, and draw
  * this real frame with the blended camera put in the player record for the call. */

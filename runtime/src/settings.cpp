@@ -5,6 +5,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -37,11 +38,15 @@ static const char kTemplate[] =
     "; scale = 2              ; window size: 640x480 times this\n"
     "; mouse_grab = 1         ; 0: let the pointer leave the window\n";
 
-static std::map<std::string, std::string> load() {
-    std::map<std::string, std::string> kv;
+static std::filesystem::path ini_path() {
     wchar_t buf[MAX_PATH * 4];
     GetModuleFileNameW(nullptr, buf, MAX_PATH * 4);
-    std::filesystem::path ini = std::filesystem::path(buf).parent_path() / "primetarget.ini";
+    return std::filesystem::path(buf).parent_path() / "primetarget.ini";
+}
+
+static std::map<std::string, std::string> load() {
+    std::map<std::string, std::string> kv;
+    std::filesystem::path ini = ini_path();
     FILE *f = _wfopen(ini.c_str(), L"rb");
     if (!f) {
         if (FILE *w = _wfopen(ini.c_str(), L"wb")) {
@@ -71,17 +76,70 @@ static std::map<std::string, std::string> load() {
     return kv;
 }
 
-/* the value of option `env_name` (e.g. "PT_MOUSE_SPEED"), or nullptr */
-const char *option(const char *env_name) {
-    if (const char *e = getenv(env_name); e && *e) return e;
+static std::map<std::string, std::string> &values() {
     static std::once_flag once;
     static std::map<std::string, std::string> kv;
     std::call_once(once, [] { kv = load(); });
+    return kv;
+}
+
+static std::string key_of(const char *env_name) {
     std::string key(env_name);
     if (key.rfind("PT_", 0) == 0) key = key.substr(3);
     for (auto &ch : key) ch = (char)tolower((unsigned char)ch);
-    auto it = kv.find(key);
+    return key;
+}
+
+/* the value of option `env_name` (e.g. "PT_MOUSE_SPEED"), or nullptr */
+const char *option(const char *env_name) {
+    if (const char *e = getenv(env_name); e && *e) return e;
+    auto &kv = values();
+    auto it = kv.find(key_of(env_name));
     return it == kv.end() || it->second.empty() ? nullptr : it->second.c_str();
+}
+
+/* Save an option (from an in-game setting) to primetarget.ini: replaces its line, or the
+ * commented-out template line for it, or adds one; everything else is kept. */
+void set_option(const char *env_name, const char *value) {
+    std::string key = key_of(env_name);
+    values()[key] = value;
+    std::filesystem::path ini = ini_path();
+    std::string text;
+    if (FILE *f = _wfopen(ini.c_str(), L"rb")) {
+        char buf[4096];
+        size_t n;
+        while ((n = fread(buf, 1, sizeof buf, f)) > 0) text.append(buf, n);
+        fclose(f);
+    } else {
+        text = kTemplate;
+    }
+    std::string out, line, active = key + " = " + value;
+    bool done = false;
+    size_t pos = 0;
+    while (pos < text.size()) {
+        size_t eol = text.find('\n', pos);
+        line = text.substr(pos, eol == std::string::npos ? std::string::npos : eol - pos);
+        pos = eol == std::string::npos ? text.size() : eol + 1;
+        std::string probe = line;
+        size_t a = probe.find_first_not_of(" \t;");
+        probe = a == std::string::npos ? "" : probe.substr(a);
+        bool is_key = !done && probe.rfind(key, 0) == 0 &&
+                      probe.find_first_not_of(" \t", key.size()) != std::string::npos &&
+                      probe[probe.find_first_not_of(" \t", key.size())] == '=';
+        if (is_key) {
+            size_t comment = line.find(';', line.find('='));   /* keep the explanation */
+            out += active + (comment != std::string::npos ? std::string(std::max<int>(1, 25 - (int)active.size()), ' ') +
+                                                                 line.substr(comment) : "") + "\n";
+            done = true;
+        } else {
+            out += line + "\n";
+        }
+    }
+    if (!done) out += active + "\n";
+    if (FILE *f = _wfopen(ini.c_str(), L"wb")) {
+        fwrite(out.data(), 1, out.size(), f);
+        fclose(f);
+    }
 }
 
 }  // namespace pt

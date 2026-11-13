@@ -25,6 +25,10 @@ void logf(unsigned ch, const char *fmt, ...);
 /* port option: environment variable env_name (e.g. "PT_MOUSE_SPEED"), else primetarget.ini's
  * mouse_speed beside the program; nullptr when unset (settings.cpp) */
 const char *option(const char *env_name);
+void set_option(const char *env_name, const char *value);   /* and save it to primetarget.ini */
+/* high frame rate (interp.cpp): the in-game "Smooth Motion" setting */
+bool interpolation_enabled();
+void set_interpolation(bool on);
 
 /* ---------- guest memory ---------- */
 void mem_init();

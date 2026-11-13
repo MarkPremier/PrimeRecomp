@@ -166,7 +166,9 @@ draws the extra frames: the blended camera (polygon found with the engine's
 fits the same sequence. Game state is otherwise unchanged. Presents wait for
 vsync. Mouse turning is not blended but extrapolated from the turns already
 sent (so it adds no lag); big jumps snap. Objects still move at 30 Hz (stage 2
-would interpolate them too).
+would interpolate them too). The in-game switch is a "Smooth Motion" checkbox the
+runtime adds to the Graphics pane (DITL 4001, `patch_ditl` in `dialogs.cpp`);
+the dialog code handles it itself and saves `interpolate` on OK.
 
 **Options** live in `primetarget.ini` beside the exe (written, commented out,
 on first run; `runtime/src/settings.cpp`); an environment variable `PT_` +
