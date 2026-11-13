@@ -512,8 +512,9 @@ def main():
         fh.write('uint32_t ppc_timebase_lo(void);\nuint32_t ppc_timebase_hi(void);\n')
         for s, e, name, _ in bodies:
             fh.write(f'void fn_{s:08X}(PPCContext *c);{f" /* {name} */" if name else ""}\n')
-        for hook in sorted(set(hooks.values())):
-            fh.write(f'int {hook}(PPCContext *c);   /* native hook, runtime/src/hooks.cpp */\n')
+        for a, hook in sorted(hooks.items()):
+            fh.write(f'int {hook}(PPCContext *c);   /* native hook (runtime/src) */\n')
+            fh.write(f'void fn_{a:08X}_orig(PPCContext *c);   /* the hooked function\'s own body */\n')
         fh.write('typedef struct { uint32_t addr; PPCFunc fn; const char *name; } PPCFuncEntry;\n')
         fh.write('extern const PPCFuncEntry ppc_func_table[];\nextern const unsigned ppc_func_count;\n')
         fh.write('#ifdef __cplusplus\n}\n#endif\n')
@@ -527,10 +528,15 @@ def main():
             fh.write('#ifndef PT_FN_ENTER\n#define PT_FN_ENTER(addr)\n#endif\n')
             fh.write('#pragma warning(disable: 4102 4146)\n\n')
             for s, e, name, body in bodies[i:i + FUNCS_PER_FILE]:
-                fh.write(f'/* {name or "(runtime)"} [{s:08X}-{e:08X}) */\nvoid fn_{s:08X}(PPCContext *c) {{\n')
-                fh.write(f'    PT_FN_ENTER(0x{s:08X}u);\n')
                 if s in hooks:
-                    fh.write(f'    if ({hooks[s]}(c)) return;\n')
+                    # the hook may run the original itself: fn_X_orig is the untouched body
+                    fh.write(f'/* {name} [{s:08X}-{e:08X}): hooked by {hooks[s]} */\n'
+                             f'void fn_{s:08X}(PPCContext *c) {{\n    PT_FN_ENTER(0x{s:08X}u);\n'
+                             f'    if ({hooks[s]}(c)) return;\n    fn_{s:08X}_orig(c);\n}}\n\n')
+                    fh.write(f'void fn_{s:08X}_orig(PPCContext *c) {{\n')
+                else:
+                    fh.write(f'/* {name or "(runtime)"} [{s:08X}-{e:08X}) */\nvoid fn_{s:08X}(PPCContext *c) {{\n')
+                    fh.write(f'    PT_FN_ENTER(0x{s:08X}u);\n')
                 fh.write('\n'.join(body))
                 fh.write('\n}\n\n')
     with open(os.path.join(out, 'ppc_table.c'), 'w') as fh:

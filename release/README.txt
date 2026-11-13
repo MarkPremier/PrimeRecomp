@@ -90,6 +90,7 @@ of a line to change that option:
     original_mouse = 1      the original game's key-press mouse
     interpolate = 0         the original 30 frames per second
     max_fps = 60            cap the frame rate (default: the display's)
+    vsync = 0               don't wait for the display's refresh (may tear)
     scale = 3               a bigger window (640x480 times this; default 2)
     mouse_grab = 0          let the pointer leave the window
 

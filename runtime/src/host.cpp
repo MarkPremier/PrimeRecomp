@@ -134,7 +134,12 @@ void init() {
     /* The game owned the whole screen on the Mac and draws its own pointer, so keep the
      * Windows pointer inside the window while it has focus (Alt+Tab leaves). mouse_grab = 0 turns it off. */
     if (const char *g = option("PT_MOUSE_GRAB"); !(g && *g == '0')) SDL_SetWindowMouseGrab(g_win, SDL_TRUE);
-    g_ren = SDL_CreateRenderer(g_win, -1, SDL_RENDERER_ACCELERATED);
+    /* vsync: frames (30 or, interpolated, up to the refresh rate) land on refreshes, without
+     * tearing or uneven pacing. vsync = 0 turns it off. */
+    const char *vs = option("PT_VSYNC");
+    uint32_t sync = vs && *vs == '0' ? 0 : SDL_RENDERER_PRESENTVSYNC;
+    g_ren = SDL_CreateRenderer(g_win, -1, SDL_RENDERER_ACCELERATED | sync);
+    if (!g_ren) g_ren = SDL_CreateRenderer(g_win, -1, sync);
     if (!g_ren) g_ren = SDL_CreateRenderer(g_win, -1, 0);
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
     SDL_RenderSetLogicalSize(g_ren, 640, 480);
@@ -383,7 +388,11 @@ void obscure_cursor() { g_obscured = true; }
 
 void present(bool force) {
     uint64_t now = SDL_GetTicks64();
-    if (!force && now - g_last_present < 15) return;
+    static uint64_t last_forced = 0;
+    if (force) last_forced = now;
+    /* While the game is presenting its own frames (gameplay), the routine presents from the
+     * event pump would only add vsync waits; they keep menus, dialogs and movies on screen. */
+    else if (now - g_last_present < 15 || now - last_forced < 100) return;
     g_last_present = now;
     qd::Screen sc = qd::screen();
     const uint8_t *fb = g_mem + sc.base;

@@ -18,6 +18,7 @@
 #include <cstring>
 
 #include "image_info.h"
+#include "ppc_funcs.h"
 #include "pt/host.h"
 #include "pt/ppc.h"
 #include "pt/runtime.h"
@@ -109,10 +110,58 @@ int lerp_angle(int a, int b, double t) {
 
 }  // namespace
 
-/* every render_screen: after a world tick, remember where the camera was and is */
+namespace {
+
+void ensure_tvectors() {
+    if (g_tv_render_view) return;
+    g_tv_render_view = tvector(kRenderView);
+    g_tv_update_screen = tvector(kUpdateScreen);
+    g_tv_find_polygon = tvector(kFindPolygon);
+    g_points = pt::sys_alloc(8);
+}
+
+/* The camera to show at fraction t (0..1) of the way from the previous tick to the last.
+ * Every frame, the real one drawn as a tick arrives (t = 0) and those between, comes from
+ * here, so the view moves steadily instead of jumping ahead and back each tick. */
+Camera blend(PPCContext *c, double t) {
+    using namespace pt;
+    Camera cam = g_cur;
+    cam.x = (int16_t)lerp(g_prev.x, g_cur.x, t);
+    cam.y = (int16_t)lerp(g_prev.y, g_cur.y, t);
+    cam.z = (int16_t)lerp(g_prev.z, g_cur.z, t);
+    cam.pitch = (int16_t)lerp(g_prev.pitch, g_cur.pitch, t);
+    /* Mouse turning isn't blended (that would show it a tick late): show the facing the
+     * world will reach once it runs the turns already on their way. Keys blend. */
+    float pending;
+    if (mouse_pending_yaw(pending) && g_cur.yaw >= 0 && g_cur.yaw < 512)
+        cam.yaw = (int16_t)((g_cur.yaw + (int)lroundf(pending)) & 511);
+    else
+        cam.yaw = (int16_t)lerp_angle(g_prev.yaw, g_cur.yaw, t);
+    /* the renderer starts from the polygon holding the eye */
+    if (cam.x == g_prev.x && cam.y == g_prev.y) {
+        cam.poly = g_prev.poly;
+    } else if (cam.x != g_cur.x || cam.y != g_cur.y) {
+        ensure_tvectors();
+        st16(g_points, (uint16_t)g_cur.x);
+        st16(g_points + 2, (uint16_t)g_cur.y);
+        st16(g_points + 4, (uint16_t)cam.x);
+        st16(g_points + 6, (uint16_t)cam.y);
+        uint32_t args[3] = {g_points, g_points + 4, (uint32_t)(int32_t)g_cur.poly};
+        int16_t poly = (int16_t)guest_call(c, g_tv_find_polygon, args, 3);
+        if (poly < 0) { cam.x = g_cur.x; cam.y = g_cur.y; cam.z = g_cur.z; }
+        else cam.poly = poly;
+    }
+    return cam;
+}
+
+}  // namespace
+
+/* every render_screen. After a world tick: remember where the camera was and is, and draw
+ * this real frame with the blended camera (t = 0) put in the player record for the call. */
 extern "C" int pt_hook_render_screen(PPCContext *c) {
     using namespace pt;
-    if ((int16_t)c->r[3] <= 0 || !ld32(kPlayerPtr)) return 0;
+    uint32_t p = ld32(kPlayerPtr);
+    if ((int16_t)c->r[3] <= 0 || !p) return 0;
     Camera now = read_camera();
     bool snap = !g_have || now.tick < g_cur.tick || now.tick - g_cur.tick > 4 ||
                 std::abs(now.x - g_cur.x) + std::abs(now.y - g_cur.y) > 2048 || std::abs(now.z - g_cur.z) > 1024;
@@ -121,7 +170,20 @@ extern "C" int pt_hook_render_screen(PPCContext *c) {
     g_cur = now;
     g_have = true;
     g_tick_time = g_last_frame = clock_type::now();
-    return 0;
+    if (!enabled()) return 0;
+
+    Camera cam = blend(c, 0.0);
+    uint8_t saved[0x10];
+    memcpy(saved, g_mem + p + kPlCamXY, sizeof saved);   /* +0x30 .. +0x3F */
+    st16(p + kPlCamXY, (uint16_t)cam.x);
+    st16(p + kPlCamXY + 2, (uint16_t)cam.y);
+    st16(p + kPlCamZ, (uint16_t)cam.z);
+    st16(p + kPlCamPoly, (uint16_t)cam.poly);
+    st16(p + kPlYaw, (uint16_t)cam.yaw);
+    st16(p + kPlPitch, (uint16_t)cam.pitch);
+    fn_010403D8_orig(c);
+    memcpy(g_mem + p + kPlCamXY, saved, sizeof saved);
+    return 1;
 }
 
 /* top of the main loop's idle routine: draw a blended frame if one is due */
@@ -135,38 +197,10 @@ extern "C" int pt_hook_idle_game_state(PPCContext *c) {
     if (since_frame < frame_interval()) return 0;
     uint32_t wv = ld32(kWorldViewPtr), bitmap = ld32(kBitmapPtr);
     if (!wv || !bitmap || ld16(kScreenMode + 2) != 0) return 0;   /* normal display only */
-    if (!g_tv_render_view) {
-        g_tv_render_view = tvector(kRenderView);
-        g_tv_update_screen = tvector(kUpdateScreen);
-        g_tv_find_polygon = tvector(kFindPolygon);
-        g_points = sys_alloc(8);
-    }
+    ensure_tvectors();
     double t = since_tick / kTick;
     if (t > 1) t = 1;
-
-    Camera cam = g_cur;
-    cam.x = (int16_t)lerp(g_prev.x, g_cur.x, t);
-    cam.y = (int16_t)lerp(g_prev.y, g_cur.y, t);
-    cam.z = (int16_t)lerp(g_prev.z, g_cur.z, t);
-    /* Mouse turning isn't blended (that would show it a tick late): show the facing the
-     * world will reach once it runs the turns already on their way. Keys blend. */
-    float pending;
-    if (mouse_pending_yaw(pending) && g_cur.yaw >= 0 && g_cur.yaw < 512)
-        cam.yaw = (int16_t)((g_cur.yaw + (int)lroundf(pending)) & 511);
-    else
-        cam.yaw = (int16_t)lerp_angle(g_prev.yaw, g_cur.yaw, t);
-    cam.pitch = (int16_t)lerp(g_prev.pitch, g_cur.pitch, t);
-    if (cam.x != g_cur.x || cam.y != g_cur.y) {
-        /* the renderer starts from the polygon holding the eye: walk there from the real one */
-        st16(g_points, (uint16_t)g_cur.x);
-        st16(g_points + 2, (uint16_t)g_cur.y);
-        st16(g_points + 4, (uint16_t)cam.x);
-        st16(g_points + 6, (uint16_t)cam.y);
-        uint32_t args[3] = {g_points, g_points + 4, (uint32_t)(int32_t)g_cur.poly};
-        int16_t poly = (int16_t)guest_call(c, g_tv_find_polygon, args, 3);
-        if (poly < 0) { cam.x = g_cur.x; cam.y = g_cur.y; cam.z = g_cur.z; }
-        else cam.poly = poly;
-    }
+    Camera cam = blend(c, t);
 
     /* draw with the blended camera, then put world_view back as render_screen left it */
     uint8_t saved[0x3C];

@@ -159,14 +159,18 @@ polygon, facing, pitch); a hook at the top of `idle_game_state` blends it
 between the last two ticks, finds the eye's polygon with the engine's
 `find_new_object_polygon`, writes it into `world_view` and runs the tail of
 `render_screen` (`render_view`, `update_screen`), then restores `world_view`.
-Game state is never changed. Mouse turning is not blended but extrapolated
+Every frame, including the real one drawn as a tick arrives (the hook runs
+`render_screen`'s own body, `fn_010403D8_orig`, with the blended camera at t = 0
+in the player record for the call), comes from the same blend, so the view
+never jumps ahead and back. Game state is otherwise unchanged. Presents wait
+for vsync. Mouse turning is not blended but extrapolated
 from the turns already sent (so it adds no lag); big jumps snap. Objects still
 move at 30 Hz (stage 2 would interpolate them too).
 
 **Options** live in `primetarget.ini` beside the exe (written, commented out,
 on first run; `runtime/src/settings.cpp`); an environment variable `PT_` +
 the key in capitals overrides each: `mouse_speed` (default 1), `mouse_invert`,
-`mouse_lock_y` (the mouse only turns), `original_mouse`, `interpolate`
+`mouse_lock_y` (the mouse only turns), `original_mouse`, `interpolate`, `vsync`
 (default 1), `max_fps` (default: the display's), `scale`, `mouse_grab`.
 
 ### Debugging aids

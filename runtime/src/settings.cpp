@@ -31,6 +31,7 @@ static const char kTemplate[] =
     "; with the camera blended between the last two, as Aleph One does.\n"
     "; interpolate = 1        ; 0: the original 30 frames per second\n"
     "; max_fps = 0            ; cap on frames per second (0: the display's refresh rate)\n"
+    "; vsync = 1              ; 0: don't wait for the display (may tear)\n"
     "\n"
     "; Window\n"
     "; scale = 2              ; window size: 640x480 times this\n"
