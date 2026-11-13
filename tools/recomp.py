@@ -40,6 +40,24 @@ class LiftError(Exception):
 
 
 # --------------------------------------------------------------------------
+# fixes to the original code, applied before lifting
+# --------------------------------------------------------------------------
+# Keyed by the application's SHA-1; each entry is (address, original word, new word, why).
+# Only bugs in the original that make the port unplayable belong here.
+PATCHES = {
+    # Prime Target v1.2 (the CD)
+    'b820f52ef26e845553776e7d4e4b93d1a10175ea': [
+        # test_mouse, "mouse controls view": after a look up/down the original parks the
+        # pointer just past the OPPOSITE edge of the 238..242 dead zone (243 / 237), so it
+        # flips between looking up and down every tick and the view drifts down whichever
+        # way the mouse moved. Recentre to 240 instead, as the horizontal axis does (320).
+        (0x0101E2E4, 0x380000F3, 0x380000F0, 'test_mouse: after look up, recentre v to 240 (was 243)'),
+        (0x0101E304, 0x380000ED, 0x380000F0, 'test_mouse: after look down, recentre v to 240 (was 237)'),
+    ],
+}
+
+
+# --------------------------------------------------------------------------
 # image
 # --------------------------------------------------------------------------
 class Image:
@@ -50,6 +68,14 @@ class Image:
         self.cbase = self.meta['code_base']
         self.dbase = self.meta['data_base']
         self.toc = self.meta['toc']
+        code = bytearray(self.code)
+        for addr, old, new, why in PATCHES.get(self.meta.get('sha1'), []):
+            o = addr - self.cbase
+            if struct.unpack_from('>I', code, o)[0] != old:
+                raise SystemExit(f'patch at {addr:#x} does not match the original code')
+            struct.pack_into('>I', code, o, new)
+            print(f'patch {addr:#010x}: {why}')
+        self.code = bytes(code)
 
     def word(self, addr):
         o = addr - self.cbase

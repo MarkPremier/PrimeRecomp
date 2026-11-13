@@ -273,6 +273,14 @@ static void run_script() {
 }
 
 void pump() {
+    /* The game recentres the mouse by writing RawMouse/MTemp and setting CrsrNew. Apply that
+     * before this pump's motion, so movement since the game last looked adds to the new centre
+     * rather than being thrown away (mouse control felt jerky). */
+    if (g_mem[0x08CE]) {
+        g_my = (int16_t)ld16(0x082C);
+        g_mx = (int16_t)ld16(0x082E);
+        g_mem[0x08CE] = 0;
+    }
     run_script();
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
@@ -312,12 +320,6 @@ void pump() {
             if (ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) { memset(g_keys, 0, sizeof g_keys); set_relative(false); }
             break;
         }
-    }
-    /* the game recentres the mouse by writing RawMouse/MTemp and setting CrsrNew */
-    if (g_mem[0x08CE]) {
-        g_my = (int16_t)ld16(0x082C);
-        g_mx = (int16_t)ld16(0x082E);
-        g_mem[0x08CE] = 0;
     }
     if (!g_relative) {
         g_mx = g_mx < 0 ? 0 : g_mx > 639 ? 639 : g_mx;
