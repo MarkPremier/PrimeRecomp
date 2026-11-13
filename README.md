@@ -141,6 +141,9 @@ toggles full screen.
 Keys map to the Apple Extended Keyboard: Left Alt is Command, Right Alt /
 Windows is Option, Ctrl is Control. The game's default controls are
 Marathon's keypad layout (8/5 move, 4/6 turn), changeable in Preferences.
+In a game, Command-P/S/R/Q (pause, save, revert, end the game) come from a
+hidden game menu installed in the submenu list; `MenuKey` searches it, as the
+Mac's did.
 
 **Mouse look** ("Mouse controls view"). Prime Target's `test_mouse` turned
 mouse movement into key flags once per 30 Hz tick (full-speed turn or none),
@@ -155,7 +158,9 @@ heartbeat is a 33 ms Time Manager task) and the game draws once per tick
 (`idle_game_state`: `update_world`, then `render_screen` if it advanced). As in
 Aleph One, the tick rate stays and extra frames are drawn between ticks, up to
 the display's refresh rate. A hook on `render_screen` records the player's
-camera (position, polygon, facing, pitch) after each tick; every frame shows
+camera (position, polygon, facing, pitch, and the step phase at player +0x144
+that `calculate_weapon_position_for_idle` bobs the weapon by) after each tick;
+every frame shows
 the camera blended at a moment 1.5 ticks behind a steady grid of when the ticks
 were due (ticks are processed up to ~10 ms late and unevenly; blending on
 processing times made motion uneven). A hook at the top of `idle_game_state`

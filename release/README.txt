@@ -62,6 +62,14 @@ menu has the alternatives), and Preferences > Controls turns on mouse control.
 Mac keys: Left Alt is the Command key; Right Alt or the Windows key is
 Option. Alt+Enter toggles full screen.
 
+During a game (Left Alt is Command):
+
+    Alt+P               pause / carry on
+    Alt+S               save the game
+    Alt+R               revert to the last save
+    Alt+Q               end the game and go back to the main menu (it asks
+                        first), e.g. to change the Preferences
+
 Full screen: Preferences > Graphics > Window Size > Full Screen is the original
 view without the control panel at the bottom; the window then fills your
 monitor too. To fill the monitor with the control panel showing, press

@@ -369,16 +369,21 @@ HLE(MenuSelect) {
 }
 
 HLE(MenuKey) {
+    /* the menu bar, then the submenu list: the game's in-game menu (Command-P pause, Command-Q
+     * end the game, ...) is installed there out of sight, and the Mac's MenuKey searched it too */
     uint8_t ch = (uint8_t)toupper((int)(ARG(0) & 0xFF));
-    for (uint32_t m : g_bar) {
-        auto list = items(m);
-        for (size_t i = 0; i < list.size(); i++)
-            if (toupper(list[i].key) == ch && enabled(m, (int)i + 1)) {
-                g_hilite = (int16_t)ld16(ld32(m));
-                draw_bar();
-                RET(((uint32_t)(uint16_t)g_hilite << 16) | (uint32_t)(i + 1));
-                return;
-            }
-    }
+    for (auto *menus : {&g_bar, &g_hier})
+        for (uint32_t m : *menus) {
+            auto list = items(m);
+            for (size_t i = 0; i < list.size(); i++)
+                if (toupper(list[i].key) == ch && enabled(m, (int)i + 1)) {
+                    int16_t id = (int16_t)ld16(ld32(m));
+                    if (menus == &g_bar) { g_hilite = id; draw_bar(); }
+                    logf(LOG_EVT, "MenuKey '%c': menu %d item %d\n", ch, id, (int)i + 1);
+                    RET(((uint32_t)(uint16_t)id << 16) | (uint32_t)(i + 1));
+                    return;
+                }
+        }
+    logf(LOG_EVT, "MenuKey '%c': no enabled item\n", ch);
     RET(0);
 }

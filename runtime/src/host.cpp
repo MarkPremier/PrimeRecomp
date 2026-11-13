@@ -246,7 +246,7 @@ static int key_code_named(const std::string &k) {
     if (k == "ctrl") return 0x3B << 8;
     if (k == "option") return 0x3A << 8;
     if (k == "cmd") return 0x37 << 8;
-    static const char *letters = "asdfhgzxcv?bqweryt";
+    static const char *letters = "asdfhgzxcv?bqweryt123465=97-80]ou[ip?lj'k;\\,/nm.";   /* Mac key codes 0x00.. */
     if (k.size() == 1) { const char *p = strchr(letters, k[0]); if (p) return (int)(p - letters) << 8 | k[0]; }
     return -1;
 }

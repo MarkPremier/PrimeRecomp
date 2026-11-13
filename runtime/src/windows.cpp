@@ -316,13 +316,15 @@ void move_window(uint32_t w, int h, int v) {
     Rect c = content_global(w), old = struct_global(w);
     Rect n{(int16_t)v, (int16_t)h, (int16_t)(v + c.bottom - c.top), (int16_t)(h + c.right - c.left)};
     set_window_geometry(w, n);
-    restack(rect_union(old, struct_global(w)));
+    /* a hidden window covers nothing: moving it uncovers nothing either (the game moves its
+     * dialogs before showing them; erasing there left a black band over the game) */
+    if (ld8(w + wr::visible)) restack(rect_union(old, struct_global(w)));
 }
 
 void size_window(uint32_t w, int width, int height) {
     Rect c = content_global(w), old = struct_global(w);
     set_window_geometry(w, {c.top, c.left, (int16_t)(c.top + height), (int16_t)(c.left + width)});
-    restack(rect_union(old, struct_global(w)));
+    if (ld8(w + wr::visible)) restack(rect_union(old, struct_global(w)));
 }
 
 bool pending_window_event(uint16_t mask, host::MacEvent &e, bool remove) {

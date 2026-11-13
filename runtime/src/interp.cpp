@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 
 #include "image_info.h"
@@ -44,6 +45,9 @@ constexpr uint32_t kRenderView = 0x0103177C, kUpdateScreen = 0x01041A24, kFindPo
 
 /* player_data / view_data fields */
 constexpr uint32_t kPlCamXY = 0x30, kPlCamZ = 0x34, kPlCamPoly = 0x36, kPlYaw = 0x3C, kPlPitch = 0x3E;
+/* variables.step_phase (fixed, 0..1): the walking bob; calculate_weapon_position_for_idle sways
+ * the weapon in hand by it, so it is blended too or the gun bobs at 30 Hz in a smooth view */
+constexpr uint32_t kPlStepPhase = 0x144;
 constexpr uint32_t kVwOriginXY = 0x18, kVwOriginZ = 0x1C, kVwYaw = 0x2A, kVwPitch = 0x2C, kVwTicks = 0x34,
                    kVwPoly = 0x38;
 
@@ -53,6 +57,7 @@ constexpr int kPitchLimit = 64;   /* the physics keeps pitch within +-64 (448..6
 
 struct Camera {
     int16_t x = 0, y = 0, z = 0, poly = -1, yaw = 0, pitch = 0;
+    int32_t step = 0;
     uint32_t tick = 0;
 };
 
@@ -148,11 +153,30 @@ Camera read_camera() {
     c.poly = (int16_t)ld16(p + kPlCamPoly);
     c.yaw = (int16_t)ld16(p + kPlYaw);
     c.pitch = (int16_t)ld16(p + kPlPitch);
+    c.step = (int32_t)ld32(p + kPlStepPhase);
     c.tick = ld32(ld32(kDynamicWorldPtr));
     return c;
 }
 
+/* PT_FRAMELOG=file: one line per drawn frame (time shown, time presented, camera) for checking pacing */
+void frame_log(char kind, clock_type::time_point at, const Camera &cam) {
+    static FILE *f = [] { const char *p = getenv("PT_FRAMELOG"); return p ? fopen(p, "w") : nullptr; }();
+    if (!f) return;
+    fprintf(f, "%c %.5f %.5f %d %d %d %d %u %d\n", kind, seconds(at), seconds(clock_type::now()), cam.x, cam.y, cam.yaw,
+            cam.pitch, g_cur.tick, cam.step);
+}
+
 int lerp(int a, int b, double t) { return a + (int)((b - a) * t + (b >= a ? 0.5 : -0.5)); }
+
+/* the step phase goes round 0..0x10000; blend across the wrap, and don't blend a jump */
+int32_t lerp_phase(int32_t a, int32_t b, double t) {
+    if (a < 0 || a > 0x10000 || b < 0 || b > 0x10000) return b;
+    int32_t d = b - a;
+    if (d < -0x8000) d += 0x10000;
+    if (d > 0x8000) d -= 0x10000;
+    if (d > 0x4000 || d < -0x4000) return b;
+    return (int32_t)(a + (int32_t)lround(d * t)) & 0xFFFF;
+}
 
 /* angles (facing, and pitch: 504 is 8 below level) are 0..511; blend the short way round */
 int lerp_angle(int a, int b, double t) {
@@ -186,6 +210,7 @@ Camera blend(PPCContext *c, clock_type::time_point at) {
     cam.x = (int16_t)lerp(a.x, b.x, t);
     cam.y = (int16_t)lerp(a.y, b.y, t);
     cam.z = (int16_t)lerp(a.z, b.z, t);
+    cam.step = lerp_phase(a.step, b.step, t);
     /* Mouse look isn't blended (that would show it late): show the facing and pitch the world
      * will reach once it runs the mouse movement already on its way. Keys blend. */
     float pend_yaw, pend_pitch;
@@ -255,8 +280,12 @@ extern "C" int pt_hook_render_screen(PPCContext *c) {
     st16(p + kPlCamPoly, (uint16_t)cam.poly);
     st16(p + kPlYaw, (uint16_t)cam.yaw);
     st16(p + kPlPitch, (uint16_t)cam.pitch);
+    uint32_t step = ld32(p + kPlStepPhase);
+    st32(p + kPlStepPhase, (uint32_t)cam.step);
     fn_010403D8_orig(c);
+    frame_log('R', g_tick_time, cam);
     memcpy(g_mem + p + kPlCamXY, saved, sizeof saved);
+    st32(p + kPlStepPhase, step);
     return 1;
 }
 
@@ -296,10 +325,14 @@ extern "C" int pt_hook_idle_game_state(PPCContext *c) {
     st16(wv + kVwYaw, (uint16_t)cam.yaw);
     st16(wv + kVwPitch, (uint16_t)cam.pitch);
     st32(wv + kVwTicks, 0);
+    uint32_t p = ld32(kPlayerPtr), step = ld32(p + kPlStepPhase);
+    st32(p + kPlStepPhase, (uint32_t)cam.step);   /* the weapon's bob */
     uint32_t args[2] = {wv, bitmap};
     guest_call(c, g_tv_render_view, args, 2);
     guest_call(c, g_tv_update_screen, nullptr, 0);
+    frame_log('B', now, cam);
     memcpy(g_mem + wv, saved, sizeof saved);
+    st32(p + kPlStepPhase, step);
     g_last_frame = now;
     static unsigned frames = 0;
     static uint32_t first_tick = g_cur.tick;
