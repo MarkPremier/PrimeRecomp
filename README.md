@@ -148,9 +148,12 @@ and its vertical handling flip-flopped. The runtime hooks it
 (`runtime/src/hooks.cpp`) and sends the actual motion through Marathon 2's
 absolute yaw/pitch action flags, which the engine still honours; a patch fixes
 the absolute-pitch decoding (see `PATCHES` in `tools/recomp.py`).
-`PT_MOUSE_SPEED` scales it (default 1), `PT_MOUSE_INVERT=1` inverts up/down,
-`PT_ORIGINAL_MOUSE=1` restores the original behaviour. "Mouse controls
-movement" is unchanged.
+"Mouse controls movement" is unchanged.
+
+**Options** live in `primetarget.ini` beside the exe (written, commented out,
+on first run; `runtime/src/settings.cpp`); an environment variable `PT_` +
+the key in capitals overrides each: `mouse_speed` (default 1), `mouse_invert`,
+`mouse_lock_y` (the mouse only turns), `original_mouse`, `scale`, `mouse_grab`.
 
 ### Debugging aids
 

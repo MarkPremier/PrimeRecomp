@@ -69,10 +69,22 @@ Mouse look: Preferences > Controls > Mouse and Keyboard, "Mouse controls view".
 The original game turned the mouse into key presses (full-speed turning or
 none) and its up/down look flipped back and forth; this port drives the
 engine's smooth Marathon 2 mouse look instead. Pushing the mouse forward looks
-up. To change it, set these before starting the program:
-    PT_MOUSE_SPEED=1.5      faster (0.5 slower; default 1)
-    PT_MOUSE_INVERT=1       pushing forward looks down
-    PT_ORIGINAL_MOUSE=1     the original key-press behaviour
+up. The engine updates the view 30 times a second, as the original did.
+
+
+OPTIONS
+-------
+
+The first run writes primetarget.ini beside the program. Remove the ; in front
+of a line to change that option:
+
+    mouse_speed = 1.5       faster mouse look (0.5 slower; default 1)
+    mouse_invert = 1        pushing the mouse forward looks down
+    mouse_lock_y = 1        the mouse only turns left and right; look up and
+                            down with the keys
+    original_mouse = 1      the original game's key-press mouse
+    scale = 3               a bigger window (640x480 times this; default 2)
+    mouse_grab = 0          let the pointer leave the window
 
 Tip: Preferences > Graphics > Number of Colors > Thousands draws the game in
 16-bit colour instead of 256 colours.

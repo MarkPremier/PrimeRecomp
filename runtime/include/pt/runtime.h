@@ -22,6 +22,9 @@ enum LogCh : unsigned {
 };
 extern unsigned g_log_mask;
 void logf(unsigned ch, const char *fmt, ...);
+/* port option: environment variable env_name (e.g. "PT_MOUSE_SPEED"), else primetarget.ini's
+ * mouse_speed beside the program; nullptr when unset (settings.cpp) */
+const char *option(const char *env_name);
 
 /* ---------- guest memory ---------- */
 void mem_init();

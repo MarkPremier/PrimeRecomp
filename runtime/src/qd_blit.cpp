@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <map>
 
+#include "pt/host.h"
 #include "pt/qd.h"
 
 namespace pt::qd {
@@ -175,4 +176,7 @@ HLE(CopyBits) {
     logf(LOG_GFX, "CopyBits %08X(%d) -> %08X(%d) [%d,%d,%d,%d]->[%d,%d,%d,%d] mode %d\n", s.base, s.depth, d.base,
          d.depth, sr.left, sr.top, sr.right, sr.bottom, dr.left, dr.top, dr.right, dr.bottom, (int16_t)ARG(4));
     copy_bits(s, d, sr, dr, (int16_t)ARG(4), clip);
+    /* a finished 3D view (or any large picture) reaching the screen: show it now rather than
+     * at the next throttled present, so frames arrive at an even 30 per second */
+    if (d.base == screen().base && (dr.right - dr.left) * (dr.bottom - dr.top) >= 640 * 120) host::present(true);
 }
