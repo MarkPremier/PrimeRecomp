@@ -192,11 +192,11 @@ static void set_relative(bool on) {
     logf(LOG_EVT, "relative mouse %s\n", on ? "on" : "off");
 }
 
+/* SDL's renderer already rewrites mouse event coordinates into the 640x480 logical
+ * space (SDL_RenderSetLogicalSize), so they are guest coordinates as they come */
 static void window_to_guest(int wx, int wy, int &gx, int &gy) {
-    float lx, ly;
-    SDL_RenderWindowToLogical(g_ren, wx, wy, &lx, &ly);
-    gx = (int)lx;
-    gy = (int)ly;
+    gx = wx;
+    gy = wy;
 }
 
 /* PT_INPUT="t_ms action args; ...": scripted input for automated testing.
