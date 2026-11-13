@@ -132,6 +132,45 @@ uint16_t modifiers() {
     return m;
 }
 
+/* widescreen = auto (the monitor's shape; the default), 0 (the original 4:3), or a shape such
+ * as 16:9 or 1.6: sets g_w / g_ext */
+static void choose_width() {
+    double aspect = 0;
+    const char *ws = option("PT_WIDESCREEN");
+    std::string v = ws ? ws : "auto";
+    if (v == "0" || v == "off") aspect = 4.0 / 3;
+    else if (size_t colon = v.find(':'); colon != std::string::npos) {
+        double a = atof(v.c_str()), b = atof(v.c_str() + colon + 1);
+        aspect = a > 0 && b > 0 ? a / b : 0;
+    } else if (v != "auto" && v != "1") aspect = atof(v.c_str());
+    if (aspect <= 0) {
+        SDL_DisplayMode dm;
+        aspect = SDL_GetDesktopDisplayMode(0, &dm) == 0 && dm.h > 0 ? (double)dm.w / dm.h : 4.0 / 3;
+    }
+    int w = (int)(480 * aspect + 0.5);
+    w = w < 640 ? 640 : w > kMaxW ? kMaxW : w;
+    g_ext = (w - 640) / 2;
+    g_w = 640 + 2 * g_ext;
+    logf(LOG_GFX, "screen: %dx480 (aspect %.3f)\n", g_w, aspect);
+}
+
+/* the widescreen option changed (Preferences > Graphics): new width, texture and window */
+void reconfigure_width() {
+    int old_w = g_w;
+    choose_width();
+    if (!g_ren || g_w == old_w) return;
+    SDL_RenderSetLogicalSize(g_ren, g_w, 480);
+    if (g_tex) SDL_DestroyTexture(g_tex);
+    g_tex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, g_w, 480);
+    std::fill(g_rgba, g_rgba + kMaxW * 480, 0xFF000000u);
+    if (!is_fullscreen() && !getenv("PT_NO_FULLSCREEN")) {   /* keep the window's height and scale */
+        int ww, wh;
+        SDL_GetWindowSize(g_win, &ww, &wh);
+        SDL_SetWindowSize(g_win, (int)(wh * (double)g_w / 480 + 0.5), wh);
+    }
+    present(true);
+}
+
 void init() {
     SDL_SetMainReady();
     /* Mouse look takes raw motion: SDL would otherwise scale it by the window's size over the
@@ -146,27 +185,7 @@ void init() {
     }
     int scale = 2;
     if (const char *s = option("PT_SCALE")) scale = atoi(s) > 0 ? atoi(s) : 2;
-    /* widescreen = auto (the monitor's shape; the default), 0 (the original 4:3), or a shape
-     * such as 16:9 or 1.6 */
-    {
-        double aspect = 0;
-        const char *ws = option("PT_WIDESCREEN");
-        std::string v = ws ? ws : "auto";
-        if (v == "0" || v == "off") aspect = 4.0 / 3;
-        else if (size_t colon = v.find(':'); colon != std::string::npos) {
-            double a = atof(v.c_str()), b = atof(v.c_str() + colon + 1);
-            aspect = a > 0 && b > 0 ? a / b : 0;
-        } else if (v != "auto" && v != "1") aspect = atof(v.c_str());
-        if (aspect <= 0) {
-            SDL_DisplayMode dm;
-            aspect = SDL_GetDesktopDisplayMode(0, &dm) == 0 && dm.h > 0 ? (double)dm.w / dm.h : 4.0 / 3;
-        }
-        int w = (int)(480 * aspect + 0.5);
-        w = w < 640 ? 640 : w > kMaxW ? kMaxW : w;
-        g_ext = (w - 640) / 2;
-        g_w = 640 + 2 * g_ext;
-        logf(LOG_GFX, "screen: %dx480 (aspect %.3f)\n", g_w, aspect);
-    }
+    choose_width();
     g_win = SDL_CreateWindow("Prime Target", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, g_w * scale, 480 * scale,
                              SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
     if (!g_win) fatal("SDL_CreateWindow: %s", SDL_GetError());

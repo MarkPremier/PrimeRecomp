@@ -32,6 +32,7 @@
 namespace pt {   /* hooks.cpp: mouse turns on their way to the world */
 void mouse_ticks_simulated(int n);
 bool mouse_pending(float &yaw, float &pitch);
+void widescreen_update(PPCContext *c);   /* widescreen.cpp */
 }
 
 namespace {
@@ -419,16 +420,16 @@ extern "C" int pt_hook_render_screen(PPCContext *c) {
 extern "C" int pt_hook_idle_game_state(PPCContext *c) {
     using namespace pt;
     {   /* Window Size "Full Screen" (screen_mode.size 0): on the Mac the view then filled the
-         * monitor, so the window fills it too; another size puts back what was there before. */
+         * monitor, so the window fills it too. Other sizes leave the window alone (shrinking the
+         * view with the F-keys shouldn't leave full screen); Alt+Enter switches. */
         static int last = -99;
-        static bool before = false;
         int size = (int16_t)ld16(kScreenMode);
         if (size != last) {
-            if (size == 0) { before = host::is_fullscreen(); host::set_fullscreen(true); }
-            else if (last == 0) host::set_fullscreen(before);
+            if (size == 0) host::set_fullscreen(true);
             last = size;
         }
     }
+    widescreen_update(c);
     if (!enabled() || !g_have) return 0;
     auto now = clock_type::now();
     double since_tick = std::chrono::duration<double>(now - g_tick_time).count();

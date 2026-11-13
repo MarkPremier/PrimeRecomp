@@ -45,7 +45,8 @@ mentions "PC Doom" keys, but the program ships set to Standard):
     Control             fire
     Space               action (doors, switches, buttons)
     Tab                 overhead map (+ and - zoom it)
-    Shift               run
+    Shift               run; under water, swim up (hold it, and move
+                        forward to climb out at the edge)
     Left Alt            sidestep (hold while turning)
     Right Alt           look (hold while moving)
     Keypad - / +        look up / down; Enter looks ahead
@@ -98,8 +99,8 @@ Widescreen: on a wide monitor the 3D view is widened to fill it (you see
 more to the sides; the middle looks exactly as before). Menus, dialogs and
 the control panel stay 4:3 in the middle. It works with Window Size "Full
 Screen" and "100%" at high resolution; the widest is about 2:1, so an
-ultrawide monitor keeps narrow bars. widescreen = 0 in primetarget.ini gives
-the original 4:3.
+ultrawide monitor keeps narrow bars. Preferences > Graphics > Widescreen
+switches between this and the original 4:3 (widescreen in primetarget.ini).
 
 
 OPTIONS

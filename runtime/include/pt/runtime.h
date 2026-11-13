@@ -30,6 +30,8 @@ void set_option(const char *env_name, const char *value);   /* and save it to pr
 bool interpolation_enabled();
 void set_interpolation(bool on);
 void init_widescreen();   /* widescreen.cpp: the host shows the widened 3D view beside the screen */
+bool widescreen_enabled();
+void set_widescreen(bool on);
 
 /* ---------- guest memory ---------- */
 void mem_init();

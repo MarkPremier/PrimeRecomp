@@ -193,7 +193,12 @@ copies the GWorld's outer columns to the host just before it. A hook after
 `initialize_view_data` keeps the original's scale for the middle 640 columns
 (its `asin(width * sin(half_cone) / standard_width)` bends wider views) and
 widens `half_cone` to the extra columns. `darken_world_window` and
-`blackout_world_window` are followed on the sides. Mouse look reads raw motion
+`blackout_world_window` are followed on the sides. A "Widescreen" checkbox in the
+Graphics pane (another `patch_ditl` item) saves `widescreen` (0 or the previous
+shape), resizes the host, and has the game's `change_screen_mode` rebuild the
+view once a game is in progress. Window Size "Full Screen" makes the window
+fill the monitor; other sizes leave the window as it is (Alt+Enter switches).
+Mouse look reads raw motion
 (`SDL_HINT_MOUSE_RELATIVE_SCALING` 0) scaled by the monitor height / 480, so
 the turning speed no longer depends on the window size.
 

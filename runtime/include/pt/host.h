@@ -31,6 +31,7 @@ int refresh_rate();                        /* the window's display, in Hz */
  * side_row(y) holds them (left side_width() pixels, then the right ones, 0xAARRGGBB), shown
  * while the function given to set_sides_live returns true */
 int side_width();
+void reconfigure_width();   /* re-read the widescreen option and resize to it */
 uint32_t *side_row(int y);
 void set_sides_live(bool (*fn)());
 bool is_fullscreen();                      /* the window covers its monitor */

@@ -14,6 +14,7 @@
  */
 #include <cmath>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "image_info.h"
@@ -197,6 +198,39 @@ extern "C" int pt_hook_blackout_world_window(PPCContext *c) {
     return 1;
 }
 
+namespace {
+bool g_view_dirty = false;   /* the width changed: the game's view needs rebuilding */
+}
+
 namespace pt {
 void init_widescreen() { host::set_sides_live(sides_live); }
+
+/* Preferences > Graphics > Widescreen */
+bool widescreen_enabled() {
+    const char *v = option("PT_WIDESCREEN");
+    return !(v && (strcmp(v, "0") == 0 || strcmp(v, "off") == 0));
+}
+void set_widescreen(bool on) {
+    const char *cur = option("PT_WIDESCREEN");
+    std::string keep = cur && widescreen_enabled() ? cur : "auto";   /* keep a chosen shape such as 16:9 */
+    set_option("PT_WIDESCREEN", on ? keep.c_str() : "0");
+    host::reconfigure_width();
+    g_view_dirty = true;
+    logf(LOG_GFX, "widescreen %s\n", on ? "on" : "off");
+}
+
+/* from the main loop (interp.cpp's idle hook): once in a game, let the game's own
+ * change_screen_mode rebuild the world GWorld and view at the new width */
+void widescreen_update(PPCContext *c) {
+    if (!g_view_dirty || game_state() != kGameInProgress) return;
+    g_view_dirty = false;
+    static uint32_t tv = 0;
+    if (!tv) {
+        tv = sys_alloc(8);
+        st32(tv, 0x0103ECCC);   /* change_screen_mode(struct screen_mode_data *, Boolean redraw) */
+        st32(tv + 4, PT_IMAGE_TOC);
+    }
+    uint32_t args[2] = {kScreenMode, 0};
+    guest_call(c, tv, args, 2);
+}
 }  // namespace pt

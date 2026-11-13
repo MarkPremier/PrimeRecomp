@@ -8,6 +8,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cstring>
 #include <map>
 #include <string>
 #include <vector>
@@ -35,27 +36,48 @@ enum { kWinControlList = 140, kDlgItems = 156, kDlgTextH = 160, kDlgEditField = 
 
 static std::string g_param[4];
 
-/* ---------- the port's own setting in Preferences > Graphics ----------
- * DITL 4001 (the Graphics pane, appended by the game's handle_switch) gains a "Smooth Motion"
- * checkbox beside "Choose Monitor...". The game never sees it: clicks on it are handled here,
- * and the choice is applied on OK (item 1 of the Preferences dialog) and dropped on Cancel. */
-static const char kSmoothLabel[] = "Smooth Motion";
-static struct { uint32_t dlg = 0; int item = 0; int pending = -1; } g_smooth;
+/* ---------- the port's own settings in Preferences > Graphics ----------
+ * DITL 4001 (the Graphics pane, appended by the game's handle_switch) gains checkboxes:
+ * "Smooth Motion" beside "Choose Monitor..." and "Widescreen" beside "Hardware Acceleration".
+ * The game never sees them: clicks on them are handled here, and each choice is applied on OK
+ * (item 1 of the Preferences dialog) and dropped on Cancel. */
+struct PortCheck {
+    const char *label;
+    int16_t top, left, bottom, right;   /* in the pane, as the DITL item */
+    bool (*get)();
+    void (*set)(bool);
+    uint32_t dlg = 0;
+    int item = 0;
+    int pending = -1;
+};
+static PortCheck g_checks[] = {
+    {"Smooth Motion", 206, 172, 224, 312, interpolation_enabled, set_interpolation},
+    {"Widescreen", 178, 205, 196, 310, widescreen_enabled, set_widescreen},
+};
+
+static PortCheck *check_labelled(const std::string &label) {
+    for (auto &k : g_checks) if (label == k.label) return &k;
+    return nullptr;
+}
 
 void patch_ditl(int16_t id, std::vector<uint8_t> &d) {
     static const char anchor[] = "Hardware Acceleration";
     if (id != 4001 || d.size() < 2 ||
         std::search(d.begin(), d.end(), anchor, anchor + sizeof anchor - 1) == d.end())
         return;
-    int n = (int16_t)(d[0] << 8 | d[1]) + 1;
+    int n = (int16_t)(d[0] << 8 | d[1]);
     auto be = [&](int v) { d.push_back((uint8_t)(v >> 8)); d.push_back((uint8_t)v); };
-    for (int i = 0; i < 4; i++) d.push_back(0);   /* item handle */
-    be(206); be(172); be(224); be(312);           /* top, left, bottom, right: beside Choose Monitor */
-    d.push_back(5);                               /* enabled checkbox */
-    d.push_back((uint8_t)(sizeof kSmoothLabel - 1));
-    d.insert(d.end(), kSmoothLabel, kSmoothLabel + sizeof kSmoothLabel - 1);
-    if (d.size() & 1) d.push_back(0);
-    d[0] = (uint8_t)(n >> 8);                     /* count - 1 */
+    for (auto &k : g_checks) {
+        for (int i = 0; i < 4; i++) d.push_back(0);   /* item handle */
+        be(k.top); be(k.left); be(k.bottom); be(k.right);
+        d.push_back(5);                               /* enabled checkbox */
+        size_t len = strlen(k.label);
+        d.push_back((uint8_t)len);
+        d.insert(d.end(), k.label, k.label + len);
+        if (d.size() & 1) d.push_back(0);
+        n++;
+    }
+    d[0] = (uint8_t)(n >> 8);                         /* count - 1 */
     d[1] = (uint8_t)n;
 }
 
@@ -559,13 +581,15 @@ int modal_dialog(PPCContext *c, uint32_t d, uint32_t filter) {
         }
         if (!got && e.what == 0) { host::present(false); Sleep(2); continue; }
         int hit = handle_event(d, e, c);
-        if (hit && d == g_smooth.dlg && hit == g_smooth.item) {   /* the port's checkbox: ours, not the game's */
+        PortCheck *mine = nullptr;   /* the port's checkboxes: ours, not the game's */
+        for (auto &k : g_checks) if (hit && d == k.dlg && hit == k.item) mine = &k;
+        if (mine) {
             uint32_t h = items(d)[hit - 1].handle;
             if (h) {
                 int v = !v16(ld32(h) + cr::contrlValue);
                 st16(ld32(h) + cr::contrlValue, (uint16_t)v);
                 draw_control(h);
-                g_smooth.pending = v;
+                mine->pending = v;
             }
             continue;
         }
@@ -601,7 +625,8 @@ HLE(GetNewDialog) {
 }
 
 HLE(DisposeDialog) {
-    if (ARG(0) == g_smooth.dlg) g_smooth = {};
+    for (auto &k : g_checks)
+        if (ARG(0) == k.dlg) { k.dlg = 0; k.item = 0; k.pending = -1; }
     dispose_dialog(ARG(0));
 }
 HLE(DrawDialog) { draw_dialog(ARG(0)); }
@@ -609,11 +634,11 @@ HLE(DrawDialog) { draw_dialog(ARG(0)); }
 HLE(ModalDialog) {
     uint32_t d = wm::front_window();
     int hit = modal_dialog(c, d, ARG(0));
-    if (d == g_smooth.dlg && (hit == 1 || hit == 2)) {   /* Preferences: OK applies, Cancel drops */
-        if (hit == 1 && g_smooth.pending >= 0 && (g_smooth.pending != 0) != interpolation_enabled())
-            set_interpolation(g_smooth.pending != 0);
-        g_smooth.pending = -1;
-    }
+    for (auto &k : g_checks)
+        if (d == k.dlg && (hit == 1 || hit == 2)) {   /* Preferences: OK applies, Cancel drops */
+            if (hit == 1 && k.pending >= 0 && (k.pending != 0) != k.get()) k.set(k.pending != 0);
+            k.pending = -1;
+        }
     st16(ARG(1), (uint16_t)hit);
 }
 
@@ -736,12 +761,12 @@ HLE(AppendDITL) {
         std::string data((const char *)g_mem + after[i].data, after[i].len);
         uint32_t h = 0;
         if (type == 8 || type == 16) { h = handle_new((uint32_t)data.size(), false); if (!data.empty()) memcpy(g_mem + ld32(h), data.data(), data.size()); }
-        else if (type == 5 && data == kSmoothLabel) {   /* the port's checkbox (patch_ditl) */
-            if (g_smooth.dlg != d) g_smooth.pending = -1;
-            int v = g_smooth.pending >= 0 ? g_smooth.pending : interpolation_enabled();
+        else if (PortCheck *k = type == 5 ? check_labelled(data) : nullptr) {   /* the port's (patch_ditl) */
+            if (k->dlg != d) k->pending = -1;
+            int v = k->pending >= 0 ? k->pending : k->get();
             h = new_control(d, r, data, true, v, 0, 1, 1, 0);
-            g_smooth.dlg = d;
-            g_smooth.item = (int)i + 1;
+            k->dlg = d;
+            k->item = (int)i + 1;
         }
         else if (type >= 4 && type <= 6) h = new_control(d, r, data, true, 0, 0, 1, type - 4, 0);
         else if (type == 7) {
@@ -778,7 +803,8 @@ HLE(ShortenDITL) {
         if (t >= 4 && t <= 7 && list[i].handle) dispose_control(list[i].handle);
         else if ((t == 8 || t == 16) && list[i].handle) handle_dispose(list[i].handle);
     }
-    if (d == g_smooth.dlg && g_smooth.item > keep) g_smooth.item = 0;   /* its pane went; the choice stays */
+    for (auto &k : g_checks)
+        if (d == k.dlg && k.item > keep) k.item = 0;   /* its pane went; the choice stays */
     if (keep < (int)list.size()) {
         uint32_t ih = ld32(d + kDlgItems);
         uint32_t cut = list[keep].addr - ld32(ih);
