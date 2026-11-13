@@ -30,6 +30,7 @@ uint16_t modifiers();
 void set_cursor(const uint8_t data[68]);
 void hide_cursor();
 void show_cursor();
+void init_cursor();   /* InitCursor: cursor level back to 0 (visible) */
 void obscure_cursor();
 
 /* audio: the mixer callback fills interleaved stereo int16 at 44100 Hz */

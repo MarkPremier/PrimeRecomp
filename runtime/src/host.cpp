@@ -92,6 +92,11 @@ static uint8_t mac_char(SDL_Keycode k, int code, bool shift) {
     case 0x33: return 0x08; case 0x75: return 0x7F; case 0x7B: return 0x1C; case 0x7C: return 0x1D;
     case 0x7E: return 0x1E; case 0x7D: return 0x1F; case 0x73: return 0x01; case 0x77: return 0x04;
     case 0x74: return 0x0B; case 0x79: return 0x0C; case 0x72: return 0x05;
+    /* keypad: the Mac types its characters whatever Num Lock says */
+    case 0x52: return '0'; case 0x53: return '1'; case 0x54: return '2'; case 0x55: return '3';
+    case 0x56: return '4'; case 0x57: return '5'; case 0x58: return '6'; case 0x59: return '7';
+    case 0x5B: return '8'; case 0x5C: return '9'; case 0x41: return '.'; case 0x45: return '+';
+    case 0x4E: return '-'; case 0x43: return '*'; case 0x4B: return '/'; case 0x51: return '=';
     }
     if (k >= SDLK_a && k <= SDLK_z) return (uint8_t)(shift ? k - 32 : k);
     if (k >= 32 && k < 127) {
@@ -181,6 +186,7 @@ static void set_relative(bool on) {
     if (on == g_relative) return;
     g_relative = on;
     SDL_SetRelativeMouseMode(on ? SDL_TRUE : SDL_FALSE);
+    logf(LOG_EVT, "relative mouse %s\n", on ? "on" : "off");
 }
 
 static void window_to_guest(int wx, int wy, int &gx, int &gy) {
@@ -347,6 +353,7 @@ bool mouse_down() { return g_button; }
 void set_cursor(const uint8_t data[68]) { memcpy(g_cursor, data, 68); g_have_cursor = true; }
 void hide_cursor() { g_cursor_level--; }
 void show_cursor() { if (g_cursor_level < 0) g_cursor_level++; }
+void init_cursor() { g_cursor_level = 0; g_obscured = false; }
 void obscure_cursor() { g_obscured = true; }
 
 void present(bool force) {

@@ -140,7 +140,7 @@ HLE(KeyTranslate) {
 HLE(InitCursor) {
     /* arrow from qd globals */
     if (qd::g_qd_theport) host::set_cursor(g_mem + qd::g_qd_theport - 108);
-    host::show_cursor();
+    host::init_cursor();   /* level 0: visible however often it was hidden (the game's show_cursor relies on it) */
 }
 HLE(SetCursor) { host::set_cursor(g_mem + ARG(0)); }
 HLE(HideCursor) { host::hide_cursor(); }
