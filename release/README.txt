@@ -62,6 +62,9 @@ menu has the alternatives), and Preferences > Controls turns on mouse control.
 Mac keys: Left Alt is the Command key; Right Alt or the Windows key is
 Option. Alt+Enter toggles full screen.
 
+While the game window is active the mouse pointer stays inside it, as it did
+on the Mac's full screen. Alt+Tab to get the pointer back for other programs.
+
 Tip: Preferences > Graphics > Number of Colors > Thousands draws the game in
 16-bit colour instead of 256 colours.
 

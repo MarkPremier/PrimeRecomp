@@ -129,6 +129,9 @@ void init() {
     g_win = SDL_CreateWindow("Prime Target", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 640 * scale, 480 * scale,
                              SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
     if (!g_win) fatal("SDL_CreateWindow: %s", SDL_GetError());
+    /* The game owned the whole screen on the Mac and draws its own pointer, so keep the
+     * Windows pointer inside the window while it has focus (Alt+Tab leaves). PT_MOUSE_GRAB=0 turns it off. */
+    if (const char *g = getenv("PT_MOUSE_GRAB"); !(g && *g == '0')) SDL_SetWindowMouseGrab(g_win, SDL_TRUE);
     g_ren = SDL_CreateRenderer(g_win, -1, SDL_RENDERER_ACCELERATED);
     if (!g_ren) g_ren = SDL_CreateRenderer(g_win, -1, 0);
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");

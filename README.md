@@ -134,7 +134,8 @@ build/msvc/Release/primetarget.exe
 
 In the repository the runtime finds `game/` in a parent folder of the exe, so
 no first-run import happens. Override with `PT_GAME_DIR`, `PT_SYSTEM_DIR` and
-`PT_SYSTEM_HFV`. `PT_SCALE` sets the window scale (default 2); Alt+Enter
+`PT_SYSTEM_HFV`. `PT_SCALE` sets the window scale (default 2); `PT_MOUSE_GRAB=0`
+stops the pointer being kept inside the window; Alt+Enter
 toggles full screen.
 
 Keys map to the Apple Extended Keyboard: Left Alt is Command, Right Alt /
