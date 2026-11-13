@@ -27,7 +27,7 @@
 
 namespace pt {   /* hooks.cpp: mouse turns on their way to the world */
 void mouse_ticks_simulated(int n);
-bool mouse_pending_yaw(float &units);
+bool mouse_pending(float &yaw, float &pitch);
 }
 
 namespace {
@@ -49,6 +49,7 @@ constexpr uint32_t kVwOriginXY = 0x18, kVwOriginZ = 0x1C, kVwYaw = 0x2A, kVwPitc
 
 /* the heartbeat: install_timer_task(30) primes its Time Manager task every 1000/30 = 33 ms */
 constexpr double kTick = 0.033;
+constexpr int kPitchLimit = 64;   /* the physics keeps pitch within +-64 (448..64 as angles) */
 
 struct Camera {
     int16_t x = 0, y = 0, z = 0, poly = -1, yaw = 0, pitch = 0;
@@ -185,14 +186,19 @@ Camera blend(PPCContext *c, clock_type::time_point at) {
     cam.x = (int16_t)lerp(a.x, b.x, t);
     cam.y = (int16_t)lerp(a.y, b.y, t);
     cam.z = (int16_t)lerp(a.z, b.z, t);
-    cam.pitch = (int16_t)lerp_angle(a.pitch, b.pitch, t);   /* an angle too: just below level is 511 */
-    /* Mouse turning isn't blended (that would show it late): show the facing the world will
-     * reach once it runs the turns already on their way. Keys blend. */
-    float pending;
-    if (mouse_pending_yaw(pending) && g_cur.yaw >= 0 && g_cur.yaw < 512)
-        cam.yaw = (int16_t)((g_cur.yaw + (int)lroundf(pending)) & 511);
-    else
+    /* Mouse look isn't blended (that would show it late): show the facing and pitch the world
+     * will reach once it runs the mouse movement already on its way. Keys blend. */
+    float pend_yaw, pend_pitch;
+    if (mouse_pending(pend_yaw, pend_pitch) && g_cur.yaw >= 0 && g_cur.yaw < 512) {
+        cam.yaw = (int16_t)((g_cur.yaw + (int)lroundf(pend_yaw)) & 511);
+        int p = g_cur.pitch >= 256 ? g_cur.pitch - 512 : g_cur.pitch;   /* angle: 504 is 8 below level */
+        p += (int)lroundf(pend_pitch);
+        p = p < -kPitchLimit ? -kPitchLimit : p > kPitchLimit ? kPitchLimit : p;
+        cam.pitch = (int16_t)(p & 511);
+    } else {
         cam.yaw = (int16_t)lerp_angle(a.yaw, b.yaw, t);
+        cam.pitch = (int16_t)lerp_angle(a.pitch, b.pitch, t);   /* an angle too: just below level is 511 */
+    }
     /* the renderer starts from the polygon holding the eye */
     if (cam.x == a.x && cam.y == a.y) {
         cam.poly = a.poly;
@@ -239,6 +245,7 @@ extern "C" int pt_hook_render_screen(PPCContext *c) {
     remember(now, snap);
     if (!enabled()) return 0;
 
+    host::pump();   /* the newest mouse motion, as for the frames between */
     Camera cam = blend(c, g_tick_time);
     uint8_t saved[0x10];
     memcpy(saved, g_mem + p + kPlCamXY, sizeof saved);   /* +0x30 .. +0x3F */
@@ -265,6 +272,7 @@ extern "C" int pt_hook_idle_game_state(PPCContext *c) {
     uint32_t wv = ld32(kWorldViewPtr), bitmap = ld32(kBitmapPtr);
     if (!wv || !bitmap || ld16(kScreenMode + 2) != 0) return 0;   /* normal display only */
     ensure_tvectors();
+    host::pump();   /* take in the newest mouse motion: frames wait on vsync, not on the event pump */
     Camera cam = blend(c, now);
 
     /* draw with the blended camera, then put world_view back as render_screen left it */

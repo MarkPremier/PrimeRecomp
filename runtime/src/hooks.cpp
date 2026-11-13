@@ -49,30 +49,36 @@ static bool option_on(const char *name) {
 }
 
 namespace {
-float g_speed = 1.0f, g_yaw_acc = 0, g_pitch_acc = 0;
+float g_speed = 1.0f, g_yaw_acc = 0, g_pitch_acc = 0, g_pitch_scale = 0.5f;
 bool g_view_mode = false;
-/* turns sent with each tick's action flags that the world has not run yet (interp.cpp) */
-std::deque<int> g_unsimulated;
-int g_last_simulated = 0;
+/* Mouse turns sent with each tick's action flags that the world has not run yet (interp.cpp):
+ * facing change, and pitch change (the physics applies an absolute pitch p as p >> 1). */
+struct Sent { int yaw, pitch; };
+std::deque<Sent> g_unsimulated;
+bool g_last_moved = false;
 }  // namespace
 
 namespace pt {
 /* the world ran n ticks: their queued mouse turns are now part of the player's facing */
 void mouse_ticks_simulated(int n) {
     while (n-- > 0 && !g_unsimulated.empty()) {
-        g_last_simulated = g_unsimulated.front();
+        g_last_moved = g_unsimulated.front().yaw || g_unsimulated.front().pitch;
         g_unsimulated.pop_front();
     }
 }
-/* For frames between ticks: the mouse turn (angle units) that is on its way but not yet in
- * the player's facing. False when the mouse isn't turning, so the frame blends instead. */
-bool mouse_pending_yaw(float &units) {
+/* For frames between ticks: the mouse turn and look (angle units) on their way but not yet in
+ * the player's facing and pitch. False when the mouse isn't looking, so the frame blends. */
+bool mouse_pending(float &yaw, float &pitch) {
     if (!g_view_mode) return false;
     int dx, dy;
     host::peek_mouse_delta(dx, dy);
-    units = g_yaw_acc + dx * g_speed;
-    for (int y : g_unsimulated) units += (float)y;
-    return units != 0 || g_last_simulated != 0;
+    yaw = g_yaw_acc + dx * g_speed;
+    pitch = (g_pitch_acc - dy * g_pitch_scale) * 0.5f;
+    for (auto &s : g_unsimulated) {
+        yaw += (float)s.yaw;
+        pitch += (float)s.pitch;
+    }
+    return yaw != 0 || pitch != 0 || g_last_moved;
 }
 }  // namespace pt
 
@@ -95,12 +101,13 @@ extern "C" int pt_hook_test_mouse(PPCContext *c) {
         st32(kLastTick, now);
         int dx, dy;
         host::take_mouse_delta(dx, dy);
+        g_pitch_scale = lock_y ? 0.0f : speed * 0.5f * invert;
         g_yaw_acc += dx * speed;                        /* angle units (512 per turn) per pixel */
-        if (!lock_y) g_pitch_acc += -dy * speed * 0.5f * invert;   /* mouse forward (dy < 0) looks up */
+        g_pitch_acc += -dy * g_pitch_scale;             /* mouse forward (dy < 0) looks up */
         yaw = take(g_yaw_acc, -64, 63);
         pitch = take(g_pitch_acc, -16, 15);
         fire = host::mouse_down();
-        g_unsimulated.push_back(yaw);
+        g_unsimulated.push_back({yaw, pitch >> 1});
         if (g_unsimulated.size() > 4) g_unsimulated.pop_front();   /* never let it drift far */
     }
     /* Merge into the keyboard's flags. A mouse turn replaces the turn keys' bits, and sends an
