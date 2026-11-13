@@ -446,7 +446,8 @@ void present(bool force) {
     static const char *run_secs = getenv("PT_RUN_SECONDS");
     static uint64_t last_shot = 0;
     static int shot_n = 0;
-    if (shot_dir && now - last_shot >= 2000) {
+    static const uint64_t shot_ms = getenv("PT_SHOT_MS") ? (uint64_t)atoi(getenv("PT_SHOT_MS")) : 2000;
+    if (shot_dir && now - last_shot >= shot_ms) {
         last_shot = now;
         SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormatFrom(g_rgba, 640, 480, 32, 640 * 4, SDL_PIXELFORMAT_ARGB8888);
         char path[512];

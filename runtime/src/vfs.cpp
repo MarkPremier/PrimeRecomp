@@ -194,7 +194,8 @@ static void add_volume(int16_t vref, const std::string &mac_name, const fs::path
 
 void init() {
     fs::path game = fs::u8path(data_root());
-    fs::path user = game.parent_path() / "user" / "Macintosh HD";
+    const char *ud = getenv("PT_USER_DIR");   /* the writable "Macintosh HD" (tests use their own) */
+    fs::path user = (ud && *ud ? fs::u8path(ud) : game.parent_path() / "user") / "Macintosh HD";
     fs::create_directories(user / "System Folder" / "Preferences");
     add_volume(-1, "Prime Target", game);
     add_volume(-2, "Macintosh HD", user);

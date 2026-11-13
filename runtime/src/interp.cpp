@@ -99,7 +99,7 @@ Camera read_camera() {
 
 int lerp(int a, int b, double t) { return a + (int)((b - a) * t + (b >= a ? 0.5 : -0.5)); }
 
-/* angles are 0..511; blend the short way round */
+/* angles (facing, and pitch: 504 is 8 below level) are 0..511; blend the short way round */
 int lerp_angle(int a, int b, double t) {
     if (a < 0 || a >= 512 || b < 0 || b >= 512) return b;
     int d = b - a;
@@ -129,7 +129,7 @@ Camera blend(PPCContext *c, double t) {
     cam.x = (int16_t)lerp(g_prev.x, g_cur.x, t);
     cam.y = (int16_t)lerp(g_prev.y, g_cur.y, t);
     cam.z = (int16_t)lerp(g_prev.z, g_cur.z, t);
-    cam.pitch = (int16_t)lerp(g_prev.pitch, g_cur.pitch, t);
+    cam.pitch = (int16_t)lerp_angle(g_prev.pitch, g_cur.pitch, t);   /* an angle too: just below level is 511 */
     /* Mouse turning isn't blended (that would show it a tick late): show the facing the
      * world will reach once it runs the turns already on their way. Keys blend. */
     float pending;

@@ -295,11 +295,15 @@ HLE(NewMovieFromFile) {
                     uint32_t off = (uint32_t)ref[5] << 16 | ref[6] << 8 | ref[7];
                     uint32_t len = be32(&r[doff + off]);
                     moov.assign(&r[doff + off + 4], &r[doff + off + 4 + len]);
-                    std::vector<uint8_t> wrapped(8);
-                    uint32_t sz = (uint32_t)moov.size() + 8;
-                    wrapped = {(uint8_t)(sz >> 24), (uint8_t)(sz >> 16), (uint8_t)(sz >> 8), (uint8_t)sz, 'm', 'o', 'o', 'v'};
-                    wrapped.insert(wrapped.end(), moov.begin(), moov.end());
-                    moov = wrapped;
+                    /* the resource is normally a whole 'moov' atom (size, type, contents), as in
+                     * the Prelude and Finale; only wrap contents that lack the header */
+                    if (!(moov.size() >= 8 && be32(&moov[4]) == 'moov' && be32(&moov[0]) <= moov.size())) {
+                        uint32_t sz = (uint32_t)moov.size() + 8;
+                        std::vector<uint8_t> wrapped = {(uint8_t)(sz >> 24), (uint8_t)(sz >> 16), (uint8_t)(sz >> 8),
+                                                        (uint8_t)sz, 'm', 'o', 'o', 'v'};
+                        wrapped.insert(wrapped.end(), moov.begin(), moov.end());
+                        moov = wrapped;
+                    }
                 }
             }
         }
