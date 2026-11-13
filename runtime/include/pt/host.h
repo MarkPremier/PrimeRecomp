@@ -27,6 +27,8 @@ bool mouse_down();
 void take_mouse_delta(int &dx, int &dy);   /* mouse motion (guest pixels) since the last call */
 void peek_mouse_delta(int &dx, int &dy);   /* the same, without taking it */
 int refresh_rate();                        /* the window's display, in Hz */
+bool is_fullscreen();                      /* the window covers its monitor */
+void set_fullscreen(bool on);
 uint16_t modifiers();
 
 /* cursor */

@@ -173,7 +173,7 @@ the dialog code handles it itself and saves `interpolate` on OK.
 **Options** live in `primetarget.ini` beside the exe (written, commented out,
 on first run; `runtime/src/settings.cpp`); an environment variable `PT_` +
 the key in capitals overrides each: `mouse_speed` (default 1), `mouse_invert`,
-`mouse_lock_y` (the mouse only turns), `original_mouse`, `interpolate`, `vsync`
+`mouse_lock_y` (the mouse only turns), `original_mouse`, `interpolate`, `vsync`, `fullscreen`
 (default 1), `max_fps` (default: the display's), `scale`, `mouse_grab`.
 
 ### Debugging aids

@@ -93,6 +93,18 @@ extern "C" int pt_hook_test_mouse(PPCContext *c) {
         g_unsimulated.clear();
         return 0;
     }
+    /* Mouse movement made while the game wasn't reading the mouse (menus, Preferences, loading,
+     * the prologue) doesn't count: sent at once it turned the player half round at the start of
+     * a level. The original recentred the pointer on entering a level to the same effect. */
+    static uint32_t last_call = 0;
+    uint32_t t_now = ticks();
+    if (!last_call || t_now - last_call > 15) {   /* over a quarter of a second (ticks are 1/60 s) */
+        int dx, dy;
+        host::take_mouse_delta(dx, dy);
+        g_yaw_acc = g_pitch_acc = 0;
+        g_unsimulated.clear();
+    }
+    last_call = t_now;
 
     static int yaw = 0, pitch = 0;
     static bool fire = false;

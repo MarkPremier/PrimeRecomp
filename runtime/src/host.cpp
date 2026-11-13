@@ -134,6 +134,7 @@ void init() {
     /* The game owned the whole screen on the Mac and draws its own pointer, so keep the
      * Windows pointer inside the window while it has focus (Alt+Tab leaves). mouse_grab = 0 turns it off. */
     if (const char *g = option("PT_MOUSE_GRAB"); !(g && *g == '0')) SDL_SetWindowMouseGrab(g_win, SDL_TRUE);
+    if (const char *f = option("PT_FULLSCREEN"); f && *f == '1') set_fullscreen(true);
     /* vsync: frames (30 or, interpolated, up to the refresh rate) land on refreshes, without
      * tearing or uneven pacing. vsync = 0 turns it off. */
     const char *vs = option("PT_VSYNC");
@@ -311,8 +312,7 @@ void pump() {
         }
         case SDL_KEYDOWN:
             if (ev.key.keysym.sym == SDLK_RETURN && (ev.key.keysym.mod & KMOD_ALT)) {
-                bool fs = SDL_GetWindowFlags(g_win) & SDL_WINDOW_FULLSCREEN_DESKTOP;
-                SDL_SetWindowFullscreen(g_win, fs ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+                set_fullscreen(!is_fullscreen());
                 break;
             }
             key_event(ev.key, true);
@@ -374,6 +374,17 @@ void mouse_global(int16_t &v, int16_t &h) { v = (int16_t)g_my; h = (int16_t)g_mx
 bool mouse_down() { return g_button; }
 void take_mouse_delta(int &dx, int &dy) { dx = g_dx_acc.exchange(0); dy = g_dy_acc.exchange(0); }
 void peek_mouse_delta(int &dx, int &dy) { dx = g_dx_acc.load(); dy = g_dy_acc.load(); }
+static bool g_fake_fullscreen = false;   /* PT_NO_FULLSCREEN (tests): decisions only */
+bool is_fullscreen() {
+    if (getenv("PT_NO_FULLSCREEN")) return g_fake_fullscreen;
+    return g_win && (SDL_GetWindowFlags(g_win) & SDL_WINDOW_FULLSCREEN_DESKTOP);
+}
+void set_fullscreen(bool on) {
+    if (!g_win || on == is_fullscreen()) return;
+    logf(LOG_GFX, "window: %s\n", on ? "full screen" : "windowed");
+    if (getenv("PT_NO_FULLSCREEN")) { g_fake_fullscreen = on; return; }
+    SDL_SetWindowFullscreen(g_win, on ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+}
 int refresh_rate() {
     SDL_DisplayMode m;
     int d = g_win ? SDL_GetWindowDisplayIndex(g_win) : 0;

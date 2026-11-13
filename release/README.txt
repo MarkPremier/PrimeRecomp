@@ -62,6 +62,11 @@ menu has the alternatives), and Preferences > Controls turns on mouse control.
 Mac keys: Left Alt is the Command key; Right Alt or the Windows key is
 Option. Alt+Enter toggles full screen.
 
+Full screen: Preferences > Graphics > Window Size > Full Screen is the original
+view without the control panel at the bottom; the window then fills your
+monitor too. To fill the monitor with the control panel showing, press
+Alt+Enter (or set fullscreen = 1 in primetarget.ini, below).
+
 While the game window is active the mouse pointer stays inside it, as it did
 on the Mac's full screen. Alt+Tab to get the pointer back for other programs.
 
@@ -95,6 +100,7 @@ of a line to change that option:
     vsync = 0               don't wait for the display's refresh (may tear)
     scale = 3               a bigger window (640x480 times this; default 2)
     mouse_grab = 0          let the pointer leave the window
+    fullscreen = 1          start filling the monitor
 
 Tip: Preferences > Graphics > Number of Colors > Thousands draws the game in
 16-bit colour instead of 256 colours.

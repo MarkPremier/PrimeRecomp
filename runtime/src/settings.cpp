@@ -36,7 +36,9 @@ static const char kTemplate[] =
     "\n"
     "; Window\n"
     "; scale = 2              ; window size: 640x480 times this\n"
-    "; mouse_grab = 1         ; 0: let the pointer leave the window\n";
+    "; mouse_grab = 1         ; 0: let the pointer leave the window\n"
+    "; fullscreen = 0         ; 1: start filling the monitor (Alt+Enter switches; Window Size\n"
+    ";                        ;    \"Full Screen\" in Preferences > Graphics also fills it)\n";
 
 static std::filesystem::path ini_path() {
     wchar_t buf[MAX_PATH * 4];
