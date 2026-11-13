@@ -124,15 +124,16 @@ guest functions entered.
 rewritten, and finds one new helper. The `difference` column of the symbol
 file records which. Reading the changed code, v1.2:
 
-* resets monsters and weapons when a saved game is loaded;
+* clears the monster and weapon tables before reading a saved game (the save
+  then restores its own; v1.1 could carry state over from the game in progress);
 * checks doors, switches and access cards against the player who pressed the
   action key, not the local player (matters in network games);
 * guards inventory cycling and item use when the player has no items;
 * doubles the delay before a dead player can respawn (1 s to 2 s);
 * reworks the per-damage-type multipliers applied to damage the player takes
   (which cases are halved or doubled, plus a new 4× case);
-* removes dead monsters' and players' bodies outright while a game-mode flag
-  is set (it is cleared on loading a saved game; probably network play);
+* removes dead monsters' and players' bodies outright in network games (the
+  flag Marathon 2's source calls `game_is_networked`);
 * drops an eye-height adjustment in the physics setup and rewrites
   `closest_point_on_circle`, `build_links_from_objects` and
   `initialize_player_weapons`;
