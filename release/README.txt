@@ -69,7 +69,12 @@ Mouse look: Preferences > Controls > Mouse and Keyboard, "Mouse controls view".
 The original game turned the mouse into key presses (full-speed turning or
 none) and its up/down look flipped back and forth; this port drives the
 engine's smooth Marathon 2 mouse look instead. Pushing the mouse forward looks
-up. The engine updates the view 30 times a second, as the original did.
+up.
+
+Frame rate: the game world runs 30 times a second, as on the Mac. The port
+draws extra frames in between (up to your display's refresh rate) with the
+camera blended between the last two updates, so turning and moving look
+smooth; monsters and other objects still move 30 times a second.
 
 
 OPTIONS
@@ -83,6 +88,8 @@ of a line to change that option:
     mouse_lock_y = 1        the mouse only turns left and right; look up and
                             down with the keys
     original_mouse = 1      the original game's key-press mouse
+    interpolate = 0         the original 30 frames per second
+    max_fps = 60            cap the frame rate (default: the display's)
     scale = 3               a bigger window (640x480 times this; default 2)
     mouse_grab = 0          let the pointer leave the window
 

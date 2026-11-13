@@ -27,6 +27,11 @@ static const char kTemplate[] =
     ";                        ;    is left to the keys\n"
     "; original_mouse = 0     ; 1: the original game's mouse (key presses, flips up/down)\n"
     "\n"
+    "; Frame rate. The game world runs 30 times a second; the port draws frames in between\n"
+    "; with the camera blended between the last two, as Aleph One does.\n"
+    "; interpolate = 1        ; 0: the original 30 frames per second\n"
+    "; max_fps = 0            ; cap on frames per second (0: the display's refresh rate)\n"
+    "\n"
     "; Window\n"
     "; scale = 2              ; window size: 640x480 times this\n"
     "; mouse_grab = 1         ; 0: let the pointer leave the window\n";

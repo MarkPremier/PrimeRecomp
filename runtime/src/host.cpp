@@ -368,6 +368,12 @@ void key_map(uint8_t out[16]) { memcpy(out, g_keys, 16); }
 void mouse_global(int16_t &v, int16_t &h) { v = (int16_t)g_my; h = (int16_t)g_mx; }
 bool mouse_down() { return g_button; }
 void take_mouse_delta(int &dx, int &dy) { dx = g_dx_acc.exchange(0); dy = g_dy_acc.exchange(0); }
+void peek_mouse_delta(int &dx, int &dy) { dx = g_dx_acc.load(); dy = g_dy_acc.load(); }
+int refresh_rate() {
+    SDL_DisplayMode m;
+    int d = g_win ? SDL_GetWindowDisplayIndex(g_win) : 0;
+    return SDL_GetCurrentDisplayMode(d < 0 ? 0 : d, &m) == 0 && m.refresh_rate > 0 ? m.refresh_rate : 60;
+}
 
 void set_cursor(const uint8_t data[68]) { memcpy(g_cursor, data, 68); g_have_cursor = true; }
 void hide_cursor() { g_cursor_level--; }

@@ -25,6 +25,8 @@ void key_map(uint8_t out[16]);
 void mouse_global(int16_t &v, int16_t &h);
 bool mouse_down();
 void take_mouse_delta(int &dx, int &dy);   /* mouse motion (guest pixels) since the last call */
+void peek_mouse_delta(int &dx, int &dy);   /* the same, without taking it */
+int refresh_rate();                        /* the window's display, in Hz */
 uint16_t modifiers();
 
 /* cursor */

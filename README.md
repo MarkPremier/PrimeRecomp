@@ -150,10 +150,24 @@ absolute yaw/pitch action flags, which the engine still honours; a patch fixes
 the absolute-pitch decoding (see `PATCHES` in `tools/recomp.py`).
 "Mouse controls movement" is unchanged.
 
+**Frame rate** (`runtime/src/interp.cpp`). The world ticks at 30 Hz and the
+game draws once per tick (`idle_game_state`: `update_world`, then
+`render_screen` if it advanced). As in Aleph One, the tick rate stays and
+extra frames are drawn between ticks, up to the display's refresh rate: after
+each tick a hook on `render_screen` records the player's camera (position,
+polygon, facing, pitch); a hook at the top of `idle_game_state` blends it
+between the last two ticks, finds the eye's polygon with the engine's
+`find_new_object_polygon`, writes it into `world_view` and runs the tail of
+`render_screen` (`render_view`, `update_screen`), then restores `world_view`.
+Game state is never changed. Mouse turning is not blended but extrapolated
+from the turns already sent (so it adds no lag); big jumps snap. Objects still
+move at 30 Hz (stage 2 would interpolate them too).
+
 **Options** live in `primetarget.ini` beside the exe (written, commented out,
 on first run; `runtime/src/settings.cpp`); an environment variable `PT_` +
 the key in capitals overrides each: `mouse_speed` (default 1), `mouse_invert`,
-`mouse_lock_y` (the mouse only turns), `original_mouse`, `scale`, `mouse_grab`.
+`mouse_lock_y` (the mouse only turns), `original_mouse`, `interpolate`
+(default 1), `max_fps` (default: the display's), `scale`, `mouse_grab`.
 
 ### Debugging aids
 

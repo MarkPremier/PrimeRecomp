@@ -64,7 +64,9 @@ PATCHES = {
 # and runs its own body only when that returns 0.
 HOOKS = {
     'b820f52ef26e845553776e7d4e4b93d1a10175ea': {
-        0x0101E28C: 'pt_hook_test_mouse',   # smooth mouse look ("mouse controls view")
+        0x0101E28C: 'pt_hook_test_mouse',        # smooth mouse look ("mouse controls view")
+        0x010403D8: 'pt_hook_render_screen',     # interp.cpp: camera after each tick
+        0x0100D2D0: 'pt_hook_idle_game_state',   # interp.cpp: blended frames between ticks
     },
 }
 
