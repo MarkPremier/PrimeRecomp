@@ -102,7 +102,7 @@ void capture_sides() {
     for (int y = 0; y < 480; y++) {
         uint32_t *row = host::side_row(y);
         if (y < top || y >= bottom) {
-            for (int i = 0; i < 2 * e; i++) row[i] = 0xFF000000u;
+            for (int i = 0; i < 2 * e; i++) row[i] = 0;   /* background: the host fills it with black as displayed */
             continue;
         }
         int gy = y - top;
@@ -122,7 +122,7 @@ void shade_sides(bool black) {
         uint32_t *row = host::side_row(y);
         for (int i = 0; i < 2 * e; i++) {
             int x = i < e ? i - e : 640 + i - e;
-            if (black || ((x + y) & 1)) row[i] = 0xFF000000u;
+            if (black || ((x + y) & 1)) row[i] = 0;
         }
     }
 }

@@ -547,6 +547,25 @@ void direct_maps(int depth, uint8_t r[256], uint8_t g[256], uint8_t b[256]) {
     }
 }
 
+/* what the display shows for black right now: through the 8-bit palette or the direct ramp, so
+ * fades (the red flash) tint it as they tint everything the game drew in black */
+uint32_t display_black_argb() {
+    Screen sc = screen();
+    if (sc.depth == 16 || sc.depth == 32) {
+        uint8_t r[256], g[256], b[256];
+        direct_maps(sc.depth, r, g, b);
+        return 0xFF000000u | (uint32_t)r[0] << 16 | (uint32_t)g[0] << 8 | b[0];
+    }
+    if (sc.depth == 8 && g_main_device) {
+        uint32_t ct = ld32(ld32(ld32(ld32(g_main_device) + gd::gdPMap)) + pm::pmTable);
+        std::vector<RGB> pal = screen_palette();
+        uint32_t idx = ct ? color_to_index(ct, RGB{0, 0, 0}) : 255;
+        if (idx < pal.size())
+            return 0xFF000000u | (uint32_t)(pal[idx].r >> 8) << 16 | (uint32_t)(pal[idx].g >> 8) << 8 | (pal[idx].b >> 8);
+    }
+    return 0xFF000000u;
+}
+
 void set_device_entries(uint32_t gdh, int16_t start, int16_t count, uint32_t tbl) {
     if (gdh == g_main_device) set_hw_entries(start, count, tbl);
     uint32_t pmp = ld32(ld32(ld32(gdh) + gd::gdPMap));

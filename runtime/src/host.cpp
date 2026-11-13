@@ -529,17 +529,24 @@ void present(bool force) {
                 g_rgba[y * g_w + g_ext + x] = bit ? 0xFF000000u : 0xFFFFFFFFu;
             }
     }
-    /* the widescreen sides: the game's widened 3D view, or black */
+    /* the widescreen sides: the game's widened 3D view, and elsewhere the game's black as the
+     * display shows it now (on a Mac bigger than 640x480 the area round the game was black, and
+     * fades such as the red flash when hurt tinted it with everything else) */
     if (g_ext) {
         bool live = g_sides_live && g_sides_live();
+        uint32_t bar = qd::display_black_argb();
         for (int y = 0; y < 480; y++) {
             uint32_t *row = g_rgba + y * g_w;
             if (live) {
                 memcpy(row, g_side[y], g_ext * 4);
                 memcpy(row + g_ext + 640, g_side[y] + g_ext, g_ext * 4);
+                for (int x = 0; x < g_ext; x++) {
+                    if (!row[x]) row[x] = bar;   /* 0: background (widescreen.cpp) */
+                    if (!row[g_ext + 640 + x]) row[g_ext + 640 + x] = bar;
+                }
             } else {
-                std::fill(row, row + g_ext, 0xFF000000u);
-                std::fill(row + g_ext + 640, row + g_w, 0xFF000000u);
+                std::fill(row, row + g_ext, bar);
+                std::fill(row + g_ext + 640, row + g_w, bar);
             }
         }
     }

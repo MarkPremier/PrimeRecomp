@@ -82,6 +82,7 @@ void set_direct_entries(int16_t start, int16_t count, uint32_t colorspecs);   /*
 /* per-component output levels for direct pixels at `depth` (16: 32 levels, 32: 256): the
  * driver's ramp (fades, the red flash when hurt), or the plain conversion */
 void direct_maps(int depth, uint8_t r[256], uint8_t g[256], uint8_t b[256]);
+uint32_t display_black_argb();   /* black as the display shows it now (tinted by fades) */
 
 /* ---------- ports / surfaces ---------- */
 bool is_color_port(uint32_t port);
