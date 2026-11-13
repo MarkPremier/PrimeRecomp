@@ -289,10 +289,19 @@ HLE(SndPlay) {
     run_queue(chan, ch);
     host::unlock_audio();
     if (temp || !(ARG(2) & 0xFF)) {
-        /* synchronous: wait for the channel to drain */
+        /* synchronous: wait for the channel to drain. Only the mixer drains it, so without a
+         * running audio device (none, or removed) give up rather than wait for ever; 30 s is a
+         * backstop longer than any of the game's sounds. */
+        uint64_t give_up = GetTickCount64() + 30000;
         for (;;) {
             host::lock_audio();
-            bool busy = g_chans[chan].voice.active || !g_chans[chan].queue.empty();
+            Channel &w = g_chans[chan];
+            bool busy = w.voice.active || !w.queue.empty();
+            if (busy && (!host::audio_running() || GetTickCount64() > give_up)) {
+                w.queue.clear();
+                w.voice.active = false;
+                busy = false;
+            }
             host::unlock_audio();
             if (!busy) break;
             host::pump();

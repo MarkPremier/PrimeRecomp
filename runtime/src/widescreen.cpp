@@ -88,15 +88,16 @@ void capture_sides() {
         return;
     }
     int e = ext();
+    uint8_t mr[256], mg[256], mb[256];   /* direct pixels go through the display's ramp (fades) */
+    if (s.depth != 8) qd::direct_maps(s.depth, mr, mg, mb);
     auto pixel = [&](int gx, int gy) -> uint32_t {
         const uint8_t *p = g_mem + s.base + (uint32_t)gy * s.row_bytes;
         if (s.depth == 8) return lut[p[gx]];
         if (s.depth == 16) {
             uint32_t v = (uint32_t)p[2 * gx] << 8 | p[2 * gx + 1];
-            uint32_t r = (v >> 10) & 31, g = (v >> 5) & 31, b = v & 31;
-            return 0xFF000000u | (r << 19 | (r >> 2) << 16) | (g << 11 | (g >> 2) << 8) | (b << 3 | b >> 2);
+            return 0xFF000000u | (uint32_t)mr[(v >> 10) & 31] << 16 | (uint32_t)mg[(v >> 5) & 31] << 8 | mb[v & 31];
         }
-        return 0xFF000000u | (uint32_t)p[4 * gx + 1] << 16 | (uint32_t)p[4 * gx + 2] << 8 | p[4 * gx + 3];
+        return 0xFF000000u | (uint32_t)mr[p[4 * gx + 1]] << 16 | (uint32_t)mg[p[4 * gx + 2]] << 8 | mb[p[4 * gx + 3]];
     };
     for (int y = 0; y < 480; y++) {
         uint32_t *row = host::side_row(y);

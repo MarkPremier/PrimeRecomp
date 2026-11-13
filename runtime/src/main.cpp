@@ -50,7 +50,14 @@ void logf(unsigned ch, const char *fmt, ...) {
     fflush(g_log);
 }
 
+static PPCContext *g_main_ctx = nullptr;   /* the guest's registers, for crash reports */
+
 static void dump_trace() {
+    if (g_main_ctx) {
+        fprintf(stderr, "registers (as last stored):");
+        for (int i = 0; i < 32; i++) fprintf(stderr, "%s r%d=%08X", i % 8 ? "" : "\n ", i, g_main_ctx->r[i]);
+        fprintf(stderr, "\n  lr=%08X\n", g_main_ctx->lr);
+    }
     fprintf(stderr, "recent function entries (oldest first):\n");
     for (unsigned i = 0; i < 32; i++) {
         uint32_t a = g_trace_ring[(g_trace_pos - 32 + i) & 255];
@@ -188,6 +195,7 @@ int main(int argc, char **argv) {
 
     static PPCContext ctx;
     PPCContext *c = &ctx;
+    g_main_ctx = c;
     c->r[1] = PT_STACK_TOP - 1024;
     c->r[2] = ld32(PT_IMAGE_MAIN_TVECTOR + 4);
     ppc_call_indirect(c, ld32(PT_IMAGE_MAIN_TVECTOR));

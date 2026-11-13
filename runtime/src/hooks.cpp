@@ -139,3 +139,33 @@ extern "C" int pt_hook_test_mouse(PPCContext *c) {
     st32(af, cur | f);
     return 1;
 }
+
+/* ---------- per-level revisit records ----------
+ * Prime Target remembers the objects of each level you leave (SaveLevel) and puts them back when
+ * you return (goto_level -> PlaceRevisitedLevelObjects). The records are a static array of 28,
+ * one per campaign level (0x24B4 bytes each, from TOC-0x3F3C), but the Map has 40 levels: the
+ * last 12 are network maps the vidmaster's level select can still start. For those the game read
+ * other variables as a record (level 29 placed a monster of type 0x9BDA and crashed) and would
+ * save over them on leaving. Levels past the array place their objects fresh and aren't saved. */
+#include "image_info.h"
+#include "ppc_funcs.h"
+
+namespace {
+constexpr uint32_t kRevisitBase = PT_IMAGE_TOC - 0x3F3C, kRevisitSize = 0x24B4;
+constexpr int kRevisitRecords = 28;
+}
+
+/* PlaceRevisitedLevelObjects(record *) */
+extern "C" int pt_hook_place_revisited(PPCContext *c) {
+    uint32_t rec = c->r[3];
+    if (rec >= kRevisitBase && (rec - kRevisitBase) / kRevisitSize < (uint32_t)kRevisitRecords) return 0;
+    pt::logf(pt::LOG_GFX, "level beyond the revisit records: placing its objects afresh\n");
+    fn_010269A0(c);   /* place_initial_objects */
+    return 1;
+}
+
+/* SaveLevel(short level_index) */
+extern "C" int pt_hook_save_level(PPCContext *c) {
+    int16_t level = (int16_t)c->r[3];
+    return level < 0 || level >= kRevisitRecords;   /* skip: no record to keep it in */
+}

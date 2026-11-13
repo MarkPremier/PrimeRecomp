@@ -208,6 +208,25 @@ the key in capitals overrides each: `mouse_speed` (default 1), `mouse_invert`,
 `mouse_lock_y` (the mouse only turns), `original_mouse`, `interpolate`, `vsync`, `fullscreen`
 (default 1), `max_fps` (default: the display's), `widescreen`, `scale`, `mouse_grab`.
 
+**Direct-colour fades.** At 16/32 bits the game fades (the red flash when hurt,
+level fades, the Brightness setting) by tinting a per-component ramp with
+`cscDirectSetEntries` (csCode 8; `build_direct_color_table` makes 32 or 256
+grey levels). The driver keeps that ramp apart from the 8-bit CLUT and the host
+maps every pixel's components through it (`qd::direct_maps`).
+
+**Revisit records.** Leaving a level stores its objects (`SaveLevel`) for
+`PlaceRevisitedLevelObjects` on a return; the static array (TOC-0x3F3C,
+0x24B4 bytes each) holds 28 records, the campaign's levels. The Map's levels
+29-40 are network maps that only the vidmaster level select (Command-Option New
+Game) can start solo; for them the game read live globals as a record (level 29
+crashed on a monster of type 0x9BDA). Hooks in `hooks.cpp` place such levels
+fresh and don't save them. Every level 1-40 has been started this way and runs.
+
+**Sound.** A synchronous `SndPlay` waits for the mixer to drain the channel; it
+gives up if no audio device is running (or after 30 s), and a removed device is
+reopened (`SDL_AUDIODEVICEREMOVED`), so a missing or unplugged device can't
+freeze the game. Crash reports print the guest registers.
+
 ### Debugging aids
 
 | Variable | Effect |

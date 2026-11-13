@@ -72,6 +72,8 @@ HOOKS = {
         0x01041A24: 'pt_hook_update_screen',     # widescreen.cpp: the columns beside the window
         0x0103EF64: 'pt_hook_darken_world_window',
         0x01040D64: 'pt_hook_blackout_world_window',
+        0x01026AB0: 'pt_hook_place_revisited',   # hooks.cpp: levels past the 28 revisit records
+        0x01009E08: 'pt_hook_save_level',
     },
 }
 

@@ -516,6 +516,37 @@ void set_hw_entries(int16_t start, int16_t count, uint32_t tbl) {
     }
 }
 
+/* Direct (16/32-bit) displays: the driver's table maps each component level (32 of them at
+ * 16 bits, 256 at 32) to an output level. The game builds a grey ramp
+ * (build_direct_color_table) and fades by tinting it (cscDirectSetEntries): the red flash
+ * when hurt, fades between levels. */
+static std::vector<RGB> g_direct_ramp;
+
+void set_direct_entries(int16_t start, int16_t count, uint32_t tbl) {
+    if (start < 0) start = 0;
+    size_t n = (size_t)start + count + 1;
+    if (n > 256) n = 256;
+    if (g_direct_ramp.size() != n) g_direct_ramp.assign(n, RGB{0, 0, 0});
+    for (int i = 0; i <= count && start + i < (int)n; i++) {
+        uint32_t e = tbl + 8 * i;
+        g_direct_ramp[start + i] = {ld16(e + 2), ld16(e + 4), ld16(e + 6)};
+    }
+}
+
+void direct_maps(int depth, uint8_t r[256], uint8_t g[256], uint8_t b[256]) {
+    int n = depth == 16 ? 32 : 256;
+    bool ramp = (int)g_direct_ramp.size() == n;
+    for (int i = 0; i < n; i++) {
+        if (ramp) {
+            r[i] = (uint8_t)(g_direct_ramp[i].r >> 8);
+            g[i] = (uint8_t)(g_direct_ramp[i].g >> 8);
+            b[i] = (uint8_t)(g_direct_ramp[i].b >> 8);
+        } else {
+            r[i] = g[i] = b[i] = (uint8_t)(n == 32 ? (i << 3 | i >> 2) : i);
+        }
+    }
+}
+
 void set_device_entries(uint32_t gdh, int16_t start, int16_t count, uint32_t tbl) {
     if (gdh == g_main_device) set_hw_entries(start, count, tbl);
     uint32_t pmp = ld32(ld32(ld32(gdh) + gd::gdPMap));

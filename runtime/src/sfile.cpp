@@ -94,6 +94,7 @@ static bool run(PPCContext *c, bool put, const std::string &prompt, std::string 
     uint32_t last_click = 0;
     int last_sel = -2;
     bool done = false, ok = false;
+    bool name_selected = put && !name.empty();   /* as on the Mac: the suggested name starts selected */
     auto redraw = [&]() {
         uint32_t saved = current_port();
         set_current_port(w);
@@ -131,9 +132,14 @@ static bool run(PPCContext *c, bool put, const std::string &prompt, std::string 
             text(w, 14, namer.top - 6, prompt);
             fill_rect_solid(w, namer, {0xFFFF, 0xFFFF, 0xFFFF});
             box(w, {(int16_t)(namer.top - 2), (int16_t)(namer.left - 2), (int16_t)(namer.bottom + 2), (int16_t)(namer.right + 2)}, {0, 0, 0});
-            text(w, namer.left + 2, namer.bottom - 4, name);
             int cx = namer.left + 2 + text_width(w, (const uint8_t *)name.data(), (int)name.size());
-            fill_rect_solid(w, {(int16_t)(namer.top + 2), (int16_t)cx, (int16_t)(namer.bottom - 2), (int16_t)(cx + 1)}, {0, 0, 0});
+            if (name_selected) {
+                fill_rect_solid(w, {(int16_t)(namer.top + 1), (int16_t)(namer.left + 1), (int16_t)(namer.bottom - 1), (int16_t)(cx + 1)}, {0, 0, 0});
+                text(w, namer.left + 2, namer.bottom - 4, name, {0xFFFF, 0xFFFF, 0xFFFF});
+            } else {
+                text(w, namer.left + 2, namer.bottom - 4, name);
+                fill_rect_solid(w, {(int16_t)(namer.top + 2), (int16_t)cx, (int16_t)(namer.bottom - 2), (int16_t)(cx + 1)}, {0, 0, 0});
+            }
         }
         set_current_port(saved);
         host::present(true);
@@ -175,7 +181,8 @@ static bool run(PPCContext *c, bool put, const std::string &prompt, std::string 
                     last_sel = i;
                     last_click = e.when;
                 }
-            } else if (in(okr)) confirm();
+            } else if (put && in(namer)) name_selected = false;
+            else if (in(okr)) confirm();
             else if (in(cancelr)) done = true;
             else if (in(upr)) {
                 uint32_t par = vfs::dir_parent(g_cur_vref, g_cur_dir);
@@ -188,8 +195,15 @@ static bool run(PPCContext *c, bool put, const std::string &prompt, std::string 
             else if (ch == 0x1B || (cmd && ch == '.')) done = true;
             else if (ch == 0x1E && !put) sel = std::max(0, sel - 1);
             else if (ch == 0x1F && !put) sel = std::min((int)items.size() - 1, sel + 1);
-            else if (put && ch == 0x08) { if (!name.empty()) name.pop_back(); }
-            else if (put && ch >= 0x20 && ch != ':' && name.size() < 31) name += (char)ch;
+            else if (put && ch == 0x08) {
+                if (name_selected) name.clear();
+                else if (!name.empty()) name.pop_back();
+                name_selected = false;
+            } else if (put && ch >= 0x20 && ch != ':') {
+                if (name_selected) name.clear();   /* typing replaces the selected name */
+                name_selected = false;
+                if (name.size() < 31) name += (char)ch;
+            }
             if (sel >= 0) { if (sel < scroll) scroll = sel; if (sel >= scroll + 8) scroll = sel - 7; }
         }
         if (!done) redraw();

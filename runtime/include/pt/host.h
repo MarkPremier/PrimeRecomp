@@ -48,6 +48,7 @@ void obscure_cursor();
 /* audio: the mixer callback fills interleaved stereo int16 at 44100 Hz */
 using AudioFill = void (*)(int16_t *out, int frames);
 void set_audio_fill(AudioFill fn);
+bool audio_running();   /* the mixer is being called (a device is open and playing) */
 void lock_audio();
 void unlock_audio();
 extern const int kAudioRate;

@@ -228,8 +228,10 @@ static int16_t video_control(uint32_t pb) {
     uint32_t rec = ld32(pb + 28);   /* csParam holds a pointer to the parameter record */
     switch (cs) {
     case 3:   /* cscSetEntries: VDSetEntryRecord {csTable, csStart, csCount} */
-    case 8:   /* cscDirectSetEntries */
         qd::set_hw_entries((int16_t)ld16(rec + 4), (int16_t)ld16(rec + 6), ld32(rec));
+        return 0;
+    case 8:   /* cscDirectSetEntries: the per-component ramp of a 16/32-bit display */
+        qd::set_direct_entries((int16_t)ld16(rec + 4), (int16_t)ld16(rec + 6), ld32(rec));
         return 0;
     case 4:   /* cscSetGamma */
     case 9:   /* cscGrayPage */

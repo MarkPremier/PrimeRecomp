@@ -124,8 +124,12 @@ of a line to change that option:
     mouse_grab = 0          let the pointer leave the window
     fullscreen = 1          start filling the monitor
 
-Tip: Preferences > Graphics > Number of Colors > Thousands draws the game in
-16-bit colour instead of 256 colours.
+Tip: Preferences > Graphics > Number of Colors > Millions (or Thousands) draws
+the game in 32-bit (16-bit) colour instead of 256 colours: smoother lighting.
+
+The campaign is levels 1-28. The vidmaster's cheat from Marathon 2 is still in
+the game: hold Command and Option (Left Alt and Right Alt) and choose New Game
+to start at any level; 29-40 are the network maps.
 
 
 FONTS

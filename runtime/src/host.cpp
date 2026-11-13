@@ -132,6 +132,8 @@ uint16_t modifiers() {
     return m;
 }
 
+static void open_audio();
+
 /* widescreen = auto (the monitor's shape; the default), 0 (the original 4:3), or a shape such
  * as 16:9 or 1.6: sets g_w / g_ext */
 static void choose_width() {
@@ -205,6 +207,14 @@ void init() {
     g_tex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, g_w, 480);
     SDL_ShowCursor(SDL_DISABLE);
 
+    open_audio();
+    st16(0x0172, 0x80);   /* MBState: up */
+}
+
+/* the default output device; again if Windows takes it away (headphones unplugged, device
+ * disabled), since the game's synchronous sounds wait on the mixer running */
+static void open_audio() {
+    if (g_audio) { SDL_CloseAudioDevice(g_audio); g_audio = 0; }
     SDL_AudioSpec want{}, have{};
     want.freq = kAudioRate;
     want.format = AUDIO_S16SYS;
@@ -221,8 +231,9 @@ void init() {
     g_audio = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
     if (g_audio) SDL_PauseAudioDevice(g_audio, 0);
     else logf(LOG_UNIMPL, "audio device unavailable: %s\n", SDL_GetError());
-    st16(0x0172, 0x80);   /* MBState: up */
 }
+
+bool audio_running() { return g_audio && SDL_GetAudioDeviceStatus(g_audio) == SDL_AUDIO_PLAYING; }
 
 void set_audio_fill(AudioFill fn) { std::lock_guard<std::mutex> lk(g_audio_mutex); g_audio_fill = fn; }
 void lock_audio() { g_audio_mutex.lock(); }
@@ -393,7 +404,13 @@ void pump() {
             break;
         }
         case SDL_WINDOWEVENT:
-            if (ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) { memset(g_keys, 0, sizeof g_keys); set_relative(false); }
+            if (ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) { memset(g_keys, 0, sizeof g_keys); g_button = false; set_relative(false); }
+            break;
+        case SDL_AUDIODEVICEREMOVED:
+            if (!ev.adevice.iscapture && ev.adevice.which == g_audio) {
+                logf(LOG_SND, "audio device removed; reopening the default\n");
+                open_audio();
+            }
             break;
         }
     }
@@ -489,17 +506,21 @@ void present(bool force) {
         for (int y = 0; y < 480; y++)
             for (int x = 0; x < 640; x++) g_rgba[y * g_w + g_ext + x] = lut[fb[y * sc.row_bytes + x]];
     } else if (sc.depth == 16) {
+        uint8_t mr[256], mg[256], mb[256];   /* through the driver's ramp, as the Mac's display did */
+        qd::direct_maps(16, mr, mg, mb);
         for (int y = 0; y < 480; y++)
             for (int x = 0; x < 640; x++) {
                 uint32_t v = (uint32_t)fb[y * sc.row_bytes + 2 * x] << 8 | fb[y * sc.row_bytes + 2 * x + 1];
-                uint32_t r = (v >> 10) & 31, g = (v >> 5) & 31, b = v & 31;
-                g_rgba[y * g_w + g_ext + x] = 0xFF000000u | (r << 19 | (r >> 2) << 16) | (g << 11 | (g >> 2) << 8) | (b << 3 | b >> 2);
+                g_rgba[y * g_w + g_ext + x] = 0xFF000000u | (uint32_t)mr[(v >> 10) & 31] << 16 |
+                                              (uint32_t)mg[(v >> 5) & 31] << 8 | mb[v & 31];
             }
     } else if (sc.depth == 32) {
+        uint8_t mr[256], mg[256], mb[256];
+        qd::direct_maps(32, mr, mg, mb);
         for (int y = 0; y < 480; y++)
             for (int x = 0; x < 640; x++) {
                 const uint8_t *p = fb + y * sc.row_bytes + 4 * x;
-                g_rgba[y * g_w + g_ext + x] = 0xFF000000u | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
+                g_rgba[y * g_w + g_ext + x] = 0xFF000000u | (uint32_t)mr[p[1]] << 16 | (uint32_t)mg[p[2]] << 8 | mb[p[3]];
             }
     } else {
         for (int y = 0; y < 480; y++)

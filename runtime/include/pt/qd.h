@@ -78,6 +78,10 @@ void set_current_device(uint32_t gdh);
 uint32_t main_device();
 void set_device_entries(uint32_t gdh, int16_t start, int16_t count, uint32_t colorspecs);
 void set_hw_entries(int16_t start, int16_t count, uint32_t colorspecs);   /* display only */
+void set_direct_entries(int16_t start, int16_t count, uint32_t colorspecs);   /* 16/32-bit display ramp */
+/* per-component output levels for direct pixels at `depth` (16: 32 levels, 32: 256): the
+ * driver's ramp (fades, the red flash when hurt), or the plain conversion */
+void direct_maps(int depth, uint8_t r[256], uint8_t g[256], uint8_t b[256]);
 
 /* ---------- ports / surfaces ---------- */
 bool is_color_port(uint32_t port);
