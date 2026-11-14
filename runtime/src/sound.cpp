@@ -31,6 +31,7 @@ struct Voice {
     int channels = 1, bits = 8;
     double rate = 22050;        /* source rate */
     double pos = 0;
+    double rate_cmd = 1.0;      /* rateCmd: this sound only; a new sound starts at its own rate */
     uint32_t loop_start = 0, loop_end = 0;
 };
 
@@ -41,7 +42,7 @@ struct Channel {
     Voice voice;
     int amp = 255;              /* ampCmd 0..255 */
     int vol_l = 0x100, vol_r = 0x100;
-    double rate_mul = 1.0;
+    double rate_mul = 1.0;      /* rateMultiplierCmd: lasts for the channel */
     bool paused = false;
     double wait_frames = 0;     /* waitCmd remaining (host frames) */
 };
@@ -91,6 +92,8 @@ static void start_header(Channel &ch, uint32_t h) {
     if (v.channels < 1 || v.channels > 2) v.channels = 1;
     v.active = v.frames > 0;
     ch.voice = v;
+    logf(LOG_SND, "snd %08X: play %u frames %d-bit %dch at %.0f Hz x%.3f, amp %d vol %X/%X\n", ch.guest, v.frames,
+         v.bits, v.channels, v.rate, ch.rate_mul * v.rate_cmd, ch.amp, ch.vol_l, ch.vol_r);
 }
 
 /* run queued commands until one blocks (a sound playing or a wait) */
@@ -105,7 +108,7 @@ static void run_queue(uint32_t key, Channel &ch) {
         case 43: ch.amp = c.p1; break;                    /* ampCmd */
         case 46: ch.vol_l = c.p2 & 0xFFFF; ch.vol_r = c.p2 >> 16; break;   /* volumeCmd */
         case 80: case 81: start_header(ch, c.p2); break;  /* soundCmd / bufferCmd */
-        case 82: ch.rate_mul = (double)c.p2 / 65536.0; break;   /* rateCmd */
+        case 82: ch.voice.rate_cmd = (double)c.p2 / 65536.0; break;   /* rateCmd: the sound playing */
         case 86: ch.rate_mul = (double)c.p2 / 65536.0; break;   /* rateMultiplierCmd */
         default: break;
         }
@@ -113,6 +116,8 @@ static void run_queue(uint32_t key, Channel &ch) {
 }
 
 static void immediate(uint32_t key, Channel &ch, const Cmd &c) {
+    logf(LOG_SND, "snd %08X: immediate cmd %d p1 %d p2 %08X%s\n", key, c.cmd & 0x7FFF, c.p1, c.p2,
+         ch.voice.active ? " (playing)" : "");
     switch (c.cmd & 0x7FFF) {
     case 3: ch.voice.active = false; ch.wait_frames = 0; break;              /* quietCmd */
     case 4: ch.queue.clear(); break;                                         /* flushCmd */
@@ -124,8 +129,13 @@ static void immediate(uint32_t key, Channel &ch, const Cmd &c) {
     case 46: ch.vol_l = c.p2 & 0xFFFF; ch.vol_r = c.p2 >> 16; break;
     case 47: if (c.p2) st32(c.p2, (uint32_t)ch.vol_r << 16 | (uint16_t)ch.vol_l); break;
     case 80: case 81: ch.queue.push_front(c); ch.voice.active = false; break;
-    case 82: ch.rate_mul = (double)c.p2 / 65536.0; break;
-    case 85: case 87: if (c.p2) st32(c.p2, (uint32_t)(ch.rate_mul * 65536.0)); break;
+    /* rateCmd / getRateCmd: the rate of the sound playing, 1.0 at its own rate. They used to set
+     * and report a lasting channel rate, so the game, which lowers a sound's pitch by reading its
+     * rate and setting 0.9375 of it, lowered every later sound on the channel again: gunshots got
+     * deeper and deeper (thunder). On the Mac each new sound starts at its own rate. */
+    case 82: ch.voice.rate_cmd = (double)c.p2 / 65536.0; break;
+    case 85: if (c.p2) st32(c.p2, (uint32_t)((ch.voice.active ? ch.voice.rate_cmd : 1.0) * 65536.0)); break;
+    case 87: if (c.p2) st32(c.p2, (uint32_t)(ch.rate_mul * 65536.0)); break;   /* getRateMultiplierCmd */
     case 86: ch.rate_mul = (double)c.p2 / 65536.0; break;
     default: ch.queue.push_front(c); break;
     }
@@ -159,7 +169,7 @@ static void mix(int16_t *out, int frames) {
             double gain = ch.amp / 255.0;
             acc[2 * i] += (int32_t)(s[0] * gain * ch.vol_l / 256.0 * g_out_l / 256.0);
             acc[2 * i + 1] += (int32_t)(s[1] * gain * ch.vol_r / 256.0 * g_out_r / 256.0);
-            v.pos += v.rate * ch.rate_mul / host::kAudioRate;
+            v.pos += v.rate * ch.rate_mul * v.rate_cmd / host::kAudioRate;
         }
     }
     for (auto it = g_movie_voices.begin(); it != g_movie_voices.end();) {
@@ -244,6 +254,7 @@ HLE(SndDoCommand) {
     if (it == g_chans.end()) { host::unlock_audio(); RET(-205); return; }   /* badChannel */
     Cmd c0 = read_cmd(ARG(1));
     if (it->second.queue.size() >= 128) { host::unlock_audio(); RET(-203); return; }   /* queueFull */
+    logf(LOG_SND, "snd %08X: queue cmd %d p1 %d p2 %08X\n", ARG(0), c0.cmd & 0x7FFF, c0.p1, c0.p2);
     it->second.queue.push_back(c0);
     run_queue(ARG(0), it->second);
     host::unlock_audio();
