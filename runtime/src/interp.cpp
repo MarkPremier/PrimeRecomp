@@ -54,6 +54,9 @@ constexpr uint32_t kPlCamXY = 0x30, kPlCamZ = 0x34, kPlCamPoly = 0x36, kPlYaw = 
 constexpr uint32_t kPlStepPhase = 0x144;
 constexpr uint32_t kVwOriginXY = 0x18, kVwOriginZ = 0x1C, kVwYaw = 0x2A, kVwPitch = 0x2C, kVwTicks = 0x34,
                    kVwPoly = 0x38;
+/* update_view_data: dtanpitch and the vertical clipping edges made from it; the trig tables */
+constexpr uint32_t kVwTopEdge = 0x12, kVwBottomEdge = 0x16, kVwHalfHeight = 0x58, kVwW2sY = 0x60, kVwDtanPitch = 0x64;
+constexpr uint32_t kSineTablePtr = 0x0114DB78, kCosineTablePtr = 0x0114DB7C;
 
 /* the heartbeat: install_timer_task(30) primes its Time Manager task every 1000/30 = 33 ms */
 constexpr double kTick = 0.033;
@@ -61,11 +64,15 @@ constexpr int kPitchLimit = 64;   /* the physics keeps pitch within +-64 (448..6
 
 struct Camera {
     int16_t x = 0, y = 0, z = 0, poly = -1, yaw = 0, pitch = 0;
+    double pitchf = 0;   /* blended frames: the pitch between whole angles (signed); pitch = its floor */
     int32_t step = 0;
     uint32_t tick = 0;
 };
 
 Camera g_prev, g_cur;
+bool g_pitchf_active = false;   /* a smooth-motion frame is drawing: pt_hook_update_view_data uses g_pitchf */
+double g_pitchf = 0;
+int32_t g_last_dtan = 0;        /* for PT_FRAMELOG: the vertical shift the last frame drew with */
 bool g_have = false;
 clock_type::time_point g_tick_time, g_last_frame;
 
@@ -283,8 +290,8 @@ Camera read_camera() {
 void frame_log(char kind, clock_type::time_point at, const Camera &cam) {
     static FILE *f = [] { const char *p = getenv("PT_FRAMELOG"); return p ? fopen(p, "w") : nullptr; }();
     if (!f) return;
-    fprintf(f, "%c %.5f %.5f %d %d %d %d %u %d\n", kind, seconds(at), seconds(clock_type::now()), cam.x, cam.y, cam.yaw,
-            cam.pitch, g_cur.tick, cam.step);
+    fprintf(f, "%c %.5f %.5f %d %d %d %d %u %d %d\n", kind, seconds(at), seconds(clock_type::now()), cam.x, cam.y, cam.yaw,
+            cam.pitch, g_cur.tick, cam.step, g_last_dtan);
 }
 
 int lerp(int a, int b, double t) { return a + (int)((b - a) * t + (b >= a ? 0.5 : -0.5)); }
@@ -337,14 +344,15 @@ Camera blend(PPCContext *c, clock_type::time_point at) {
     float pend_yaw, pend_pitch;
     if (mouse_pending(pend_yaw, pend_pitch) && g_cur.yaw >= 0 && g_cur.yaw < 512) {
         cam.yaw = (int16_t)((g_cur.yaw + (int)lroundf(pend_yaw)) & 511);
-        int p = g_cur.pitch >= 256 ? g_cur.pitch - 512 : g_cur.pitch;   /* angle: 504 is 8 below level */
-        p += (int)lroundf(pend_pitch);
-        p = p < -kPitchLimit ? -kPitchLimit : p > kPitchLimit ? kPitchLimit : p;
-        cam.pitch = (int16_t)(p & 511);
+        double p = (g_cur.pitch >= 256 ? g_cur.pitch - 512 : g_cur.pitch) + (double)pend_pitch;   /* 504: 8 below level */
+        cam.pitchf = p < -kPitchLimit ? -kPitchLimit : p > kPitchLimit ? kPitchLimit : p;
     } else {
         cam.yaw = (int16_t)lerp_angle(a.yaw, b.yaw, t);
-        cam.pitch = (int16_t)lerp_angle(a.pitch, b.pitch, t);   /* an angle too: just below level is 511 */
+        auto signed_pitch = [](int v) { return v >= 256 ? v - 512 : v; };   /* an angle: just below level is 511 */
+        int pa = signed_pitch(a.pitch), pb = signed_pitch(b.pitch);
+        cam.pitchf = pa + (pb - pa) * t;
     }
+    cam.pitch = (int16_t)((int)std::floor(cam.pitchf) & 511);   /* the rest is drawn by pt_hook_update_view_data */
     /* the renderer starts from the polygon holding the eye */
     if (cam.x == a.x && cam.y == a.y) {
         cam.poly = a.poly;
@@ -408,11 +416,47 @@ extern "C" int pt_hook_render_screen(PPCContext *c) {
     uint32_t step = ld32(p + kPlStepPhase);
     st32(p + kPlStepPhase, (uint32_t)cam.step);
     blend_world(g_tick_time);
+    g_pitchf_active = true;
+    g_pitchf = cam.pitchf;
     fn_010403D8_orig(c);
+    g_pitchf_active = false;
     restore_world();
     frame_log('R', g_tick_time, cam);
     memcpy(g_mem + p + kPlCamXY, saved, sizeof saved);
     st32(p + kPlStepPhase, step);
+    return 1;
+}
+
+/* update_view_data(view), at the start of render_view: the renderer's one use of the pitch is
+ * here, as dtanpitch = world_to_screen_y * sine[pitch] / cosine[pitch] (+0x64) and the vertical
+ * clipping edges made from it (+0x12, +0x16). The pitch is a whole angle (0.7 degrees: about 5
+ * lines on a 480-line view), so slow looking up or down moved in steps. For smooth-motion frames
+ * the shift is taken between the two whole pitches either side, from the game's own tables, so
+ * whole pitches draw exactly as before. */
+extern "C" int pt_hook_update_view_data(PPCContext *c) {
+    using namespace pt;
+    uint32_t v = c->r[3];
+    fn_01031AD4_orig(c);
+    g_last_dtan = (int32_t)ld32(v + kVwDtanPitch);
+    if (!g_pitchf_active || v != ld32(kWorldViewPtr)) return 1;
+    int n = (int)std::floor(g_pitchf);
+    double f = g_pitchf - n;
+    if (f < 1e-4 || (int16_t)ld16(v + kVwPitch) != (int16_t)(n & 511)) return 1;
+    uint32_t sine = ld32(kSineTablePtr), cosine = ld32(kCosineTablePtr);
+    int32_t w2s = (int32_t)ld32(v + kVwW2sY);
+    auto shift = [&](int angle) {   /* as update_view_data computes it (divw truncates) */
+        angle &= 511;
+        int32_t s = (int32_t)ld32(sine + 4 * angle), co = (int32_t)ld32(cosine + 4 * angle);
+        return co ? (w2s * s) / co : 0;
+    };
+    int32_t d0 = shift(n), d1 = shift(n + 1);
+    if ((int32_t)ld32(v + kVwDtanPitch) != d0) return 1;   /* not the pitch we set: leave it */
+    int32_t d = (int32_t)lround(d0 + (d1 - d0) * f);
+    int32_t half_h = (int32_t)ld32(v + kVwHalfHeight);
+    st32(v + kVwDtanPitch, (uint32_t)d);
+    g_last_dtan = d;
+    st16(v + kVwTopEdge, (uint16_t)(int16_t)(-(half_h + d)));
+    st16(v + kVwBottomEdge, (uint16_t)(int16_t)(-half_h + d));
     return 1;
 }
 
@@ -455,8 +499,11 @@ extern "C" int pt_hook_idle_game_state(PPCContext *c) {
     uint32_t p = ld32(kPlayerPtr), step = ld32(p + kPlStepPhase);
     st32(p + kPlStepPhase, (uint32_t)cam.step);   /* the weapon's bob */
     blend_world(now);   /* platforms and objects */
+    g_pitchf_active = true;
+    g_pitchf = cam.pitchf;
     uint32_t args[2] = {wv, bitmap};
     guest_call(c, g_tv_render_view, args, 2);
+    g_pitchf_active = false;
     guest_call(c, g_tv_update_screen, nullptr, 0);
     restore_world();
     frame_log('B', now, cam);

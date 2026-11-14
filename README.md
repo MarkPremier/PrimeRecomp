@@ -178,7 +178,13 @@ heights ([0x114449C], 32 bytes, +8/+0xA), sides' primary texture y0
 ([0x11444A0], 0x46 bytes, +6) and the 384 objects' locations ([0x11444B0],
 0x32 bytes, flags +0xE); each frame writes the values blended at the camera's
 moment (objects only within a speed limit, keeping their live polygon) and
-undoes them after drawing. The in-game switch is a "Smooth Motion" checkbox the
+undoes them after drawing. The pitch is drawn between whole angles: the
+renderer's only use of it is `update_view_data`'s `dtanpitch` (view +0x64,
+world_to_screen_y * sine / cosine) and the vertical clipping edges from it
+(+0x12, +0x16), so a hook after it takes the shift between the two whole pitches
+either side from the game's own tables (whole pitches draw exactly as before;
+floors, ceilings and the sky read the same fields). The facing is still drawn
+in whole angles: it feeds every point transform. The in-game switch is a "Smooth Motion" checkbox the
 runtime adds to the Graphics pane (DITL 4001, `patch_ditl` in `dialogs.cpp`);
 the dialog code handles it itself and saves `interpolate` on OK.
 
