@@ -73,7 +73,7 @@ bool mouse_pending(float &yaw, float &pitch) {
     int dx, dy;
     host::peek_mouse_delta(dx, dy);
     yaw = g_yaw_acc + dx * g_speed;
-    pitch = (g_pitch_acc - dy * g_pitch_scale) * 0.5f;
+    pitch = g_pitch_acc - dy * g_pitch_scale * 0.5f;
     for (auto &s : g_unsimulated) {
         yaw += (float)s.yaw;
         pitch += (float)s.pitch;
@@ -115,11 +115,16 @@ extern "C" int pt_hook_test_mouse(PPCContext *c) {
         host::take_mouse_delta(dx, dy);
         g_pitch_scale = lock_y ? 0.0f : speed * 0.5f * invert;
         g_yaw_acc += dx * speed;                        /* angle units (512 per turn) per pixel */
-        g_pitch_acc += -dy * g_pitch_scale;             /* mouse forward (dy < 0) looks up */
+        /* Pitch in the player's own units: the physics applies the sent value p as p >> 1, so
+         * send twice a whole number. Sending odd values lost the half (+1 became 0, -1 became
+         * -1): slow looks up stalled while the frames between ticks showed the half and took it
+         * back, a vertical judder, and up and down ran at different speeds. */
+        g_pitch_acc += -dy * g_pitch_scale * 0.5f;      /* mouse forward (dy < 0) looks up */
         yaw = take(g_yaw_acc, -64, 63);
-        pitch = take(g_pitch_acc, -16, 15);
+        int look = take(g_pitch_acc, -8, 7);
+        pitch = 2 * look;
         fire = host::mouse_down();
-        g_unsimulated.push_back({yaw, pitch >> 1});
+        g_unsimulated.push_back({yaw, look});
         if (g_unsimulated.size() > 4) g_unsimulated.pop_front();   /* never let it drift far */
     }
     /* Merge into the keyboard's flags. A mouse turn replaces the turn keys' bits, and sends an
