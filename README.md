@@ -183,15 +183,33 @@ renderer's only use of it is `update_view_data`'s `dtanpitch` (view +0x64,
 world_to_screen_y * sine / cosine) and the vertical clipping edges from it
 (+0x12, +0x16), so a hook after it takes the shift between the two whole pitches
 either side from the game's own tables (whole pitches draw exactly as before;
-floors, ceilings and the sky read the same fields). The facing is still drawn
-in whole angles: it feeds every point transform. The in-game switch is a "Smooth Motion" checkbox the
+floors, ceilings and the sky read the same fields). The facing is drawn between
+whole angles too (a whole angle is ~10 pixels at 480 lines, ~29 at 1440): the
+renderer turns the world through `cosine_table[yaw]` / `sine_table[yaw]`
+(`transform_point2d`, and the floors' texture steps), so while a smooth frame
+draws those two entries hold values between the table's neighbours and are put
+back after; the world-space view cone `update_view_data` builds from yaw ±
+half_cone (view +8..+14) is widened a step on the turned side, and a hook on
+`_prelandscape_horizontal_polygon_lines` adds the fraction to each sky line's
+first column (1 << 23 per angle).
+
+Frame pacing (with vsync): a frame that took longer than a refresh landed 1, 2
+or 3 refreshes after the last depending on when it started. Frames are now kept
+k refreshes apart, k from the smoothed drawing time (start to present); the
+refresh clock is the compositor's (`DwmGetCompositionTimingInfo`, `vblank.cpp`),
+since SDL's present returns before the refresh when the driver queues frames.
+Frames between ticks start their drawing time ahead of their refresh, a tick's
+frame waits for its slot (at most k refreshes; the world has already run), and
+every frame is blended for the refresh it is shown at. `PT_FRAMELOG` writes one
+line per frame (moment, present time, camera, facing with its fraction, k,
+drawing time). The in-game switch is a "Smooth Motion" checkbox the
 runtime adds to the Graphics pane (DITL 4001, `patch_ditl` in `dialogs.cpp`);
 the dialog code handles it itself and saves `interpolate` on OK.
 
 **Widescreen** (`runtime/src/widescreen.cpp`). The Mac screen stays 640x480;
 the host presents extra columns either side (`widescreen`: the monitor's shape
-by default, at most 1000 wide because the renderer's scratch tables in
-`allocate_texture_tables` hold 1024 columns). For Window Size Full Screen and
+by default, at most 1000 wide: the renderer's tables held 1024 columns before
+the high-resolution patches below, and wider shapes are untested). For Window Size Full Screen and
 100% at high resolution a hook widens `calculate_destination_frame`'s rectangle
 by those columns; the world GWorld, the view's `screen_width` and the renderer
 follow. `update_screen`'s CopyBits to the window clips to the middle, and a hook
@@ -204,6 +222,32 @@ Graphics pane (another `patch_ditl` item) saves `widescreen` (0 or the previous
 shape), resizes the host, and has the game's `change_screen_mode` rebuild the
 view once a game is in progress. Window Size "Full Screen" makes the window
 fill the monitor; other sizes leave the window as it is (Alt+Enter switches).
+**High resolution** (`hires`, experimental; also `widescreen.cpp`). The
+renderer's own limits were three allocations, now patched (`PATCHES` in
+`recomp.py`) to hold 4096: `allocate_texture_tables`' two scratch tables (one
+entry per column for walls, per row for floors) and 34-byte-per-line
+precalculation table, sized for 1024 lines, and `initialize_screen`'s world
+bitmap header, 480 row pointers. (The `== 1024` compares in the landscape and
+pretexture code test texture sizes, not the screen.) With `hires = N` and Window
+Size Full Screen, `calculate_destination_frame` gives the callers that size the
+world GWorld and the view an N-line frame as wide as the presented shape
+(1917x1080 at 16:9, 3000x1440 at the widescreen limit; the sky's scale follows
+the view's cone, so it matches 480 at the same shape); the callers that place the world on the Mac screen
+(`update_screen`, `darken`/`validate`/`blackout_world_window`) keep the 640x480
+one, so `update_screen`'s CopyBits shrinks the world onto the Mac screen (a
+same-format nearest-pixel fast path) for dialogs over the game. The game makes
+`standard_screen_width` twice the height, so the view hook's 640-column
+reference becomes 640 x N/480 and its scale N/480 times the original's. A hook
+copies the GWorld's pixels to the host just before, which presents them, through
+the display's colours at present time (so fades show), instead of the Mac screen
+while a game is in progress and no dialog has shaded it. Cost at 1080, 32 bits:
+about 10 ms a frame (~100 fps; 480 holds 144). In the game it is chosen from
+Window Size: `patch_menu` (`dialogs.cpp`) appends "Full Screen 1080p" and
+"Full Screen 1440p" to MENU 2001 (the pop-up is widened 25 pixels for them).
+The game only sees Full Screen: `GetControlValue` on that pop-up reads 1 for
+them and the game's `SetControlValue(1)` shows the one in use; the choice is
+saved as `hires` on OK and dropped on Cancel, like the checkboxes.
+
 Mouse look reads raw motion
 (`SDL_HINT_MOUSE_RELATIVE_SCALING` 0) scaled by the monitor height / 480, so
 the turning speed no longer depends on the window size.
@@ -212,7 +256,7 @@ the turning speed no longer depends on the window size.
 on first run; `runtime/src/settings.cpp`); an environment variable `PT_` +
 the key in capitals overrides each: `mouse_speed` (default 1), `mouse_invert`,
 `mouse_lock_y` (the mouse only turns), `original_mouse`, `interpolate`, `vsync`, `fullscreen`
-(default 1), `max_fps` (default: the display's), `widescreen`, `scale`, `mouse_grab`.
+(default 1), `max_fps` (default: the display's), `widescreen`, `hires`, `scale`, `mouse_grab`.
 
 **Direct-colour fades.** At 16/32 bits the game fades (the red flash when hurt,
 level fades, the Brightness setting) by tinting a per-component ramp with

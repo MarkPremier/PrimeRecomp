@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstring>
 #include <initializer_list>
+#include <thread>
 #include <vector>
 
 #include "image_info.h"
@@ -52,8 +53,8 @@ constexpr uint32_t kPlCamXY = 0x30, kPlCamZ = 0x34, kPlCamPoly = 0x36, kPlYaw = 
 /* variables.step_phase (fixed, 0..1): the walking bob; calculate_weapon_position_for_idle sways
  * the weapon in hand by it, so it is blended too or the gun bobs at 30 Hz in a smooth view */
 constexpr uint32_t kPlStepPhase = 0x144;
-constexpr uint32_t kVwOriginXY = 0x18, kVwOriginZ = 0x1C, kVwYaw = 0x2A, kVwPitch = 0x2C, kVwTicks = 0x34,
-                   kVwPoly = 0x38;
+constexpr uint32_t kVwOriginXY = 0x18, kVwOriginZ = 0x1C, kVwYaw = 0x2A, kVwPitch = 0x2C, kVwHalfCone = 0x30,
+                   kVwTicks = 0x34, kVwPoly = 0x38;
 /* update_view_data: dtanpitch and the vertical clipping edges made from it; the trig tables */
 constexpr uint32_t kVwTopEdge = 0x12, kVwBottomEdge = 0x16, kVwHalfHeight = 0x58, kVwW2sY = 0x60, kVwDtanPitch = 0x64;
 constexpr uint32_t kSineTablePtr = 0x0114DB78, kCosineTablePtr = 0x0114DB7C;
@@ -65,6 +66,7 @@ constexpr int kPitchLimit = 64;   /* the physics keeps pitch within +-64 (448..6
 struct Camera {
     int16_t x = 0, y = 0, z = 0, poly = -1, yaw = 0, pitch = 0;
     double pitchf = 0;   /* blended frames: the pitch between whole angles (signed); pitch = its floor */
+    double yawf = 0;     /* ... and the facing (0..512); yaw = its floor */
     int32_t step = 0;
     uint32_t tick = 0;
 };
@@ -72,6 +74,42 @@ struct Camera {
 Camera g_prev, g_cur;
 bool g_pitchf_active = false;   /* a smooth-motion frame is drawing: pt_hook_update_view_data uses g_pitchf */
 double g_pitchf = 0;
+double g_yaw_frac = 0;          /* ... and the facing's part past the whole angle being drawn (0..1) */
+
+/* The facing between whole angles. The renderer turns the world by the view's facing through
+ * cosine_table[yaw] / sine_table[yaw] (transform_point2d and the floors' texture steps), so while
+ * a smooth-motion frame draws, those two entries hold the facing's own cosine and sine (between
+ * the table's neighbours) and the view turns by the fraction too. The world-space view cone
+ * (update_view_data, from yaw +- half_cone) is widened a step on the turned side, and the sky is
+ * offset by the fraction (pt_hook_prelandscape). Whole angles draw as before. */
+struct YawPatch {
+    uint32_t cos_at = 0, sin_at = 0, cos_was = 0, sin_was = 0;
+    void apply(int yaw, double f) {
+        using namespace pt;
+        restore();
+        if (f < 1e-4 || yaw < 0 || yaw >= 512) return;
+        uint32_t cosine = ld32(kCosineTablePtr), sine = ld32(kSineTablePtr);
+        if (!cosine || !sine) return;
+        int n = (yaw + 1) & 511;
+        auto mix = [&](uint32_t tab) {
+            int32_t a = (int32_t)ld32(tab + 4 * yaw), b = (int32_t)ld32(tab + 4 * n);
+            return (uint32_t)(int32_t)lround(a + (b - a) * f);
+        };
+        cos_at = cosine + 4 * yaw;
+        sin_at = sine + 4 * yaw;
+        cos_was = ld32(cos_at);
+        sin_was = ld32(sin_at);
+        uint32_t c = mix(cosine), s = mix(sine);
+        st32(cos_at, c);
+        st32(sin_at, s);
+    }
+    void restore() {
+        using namespace pt;
+        if (cos_at) { st32(cos_at, cos_was); st32(sin_at, sin_was); }
+        cos_at = sin_at = 0;
+    }
+};
+YawPatch g_yaw_patch;
 int32_t g_last_dtan = 0;        /* for PT_FRAMELOG: the vertical shift the last frame drew with */
 bool g_have = false;
 clock_type::time_point g_tick_time, g_last_frame;
@@ -264,6 +302,86 @@ double frame_interval() {
     return iv;
 }
 
+/* ---------- frame pacing (vsync) ----------
+ * A frame that takes longer than a refresh to draw used to land after 1, 2 or 3 refreshes
+ * depending on when it started, and showed the moment it started: uneven steps on screen. Now
+ * frames are kept k refreshes apart (k from how long they take to draw), each frame between
+ * ticks starts its drawing time ahead of its refresh (so the mouse is read the same time
+ * before it shows), and every frame is blended for the refresh it will be shown at. */
+using seconds_d = std::chrono::duration<double>;
+inline clock_type::duration dur(double s) { return std::chrono::duration_cast<clock_type::duration>(seconds_d(s)); }
+
+struct Pacer {
+    double cost = 0.004;    /* drawing time, start to present (smoothed, seconds) */
+    int k = 1;              /* refreshes per frame */
+    clock_type::time_point start, pending, last_target;
+    bool drawing = false, have_last = false;
+    double per = 1.0 / 60;
+    double period() const { return per; }
+    double estimate() const { return cost * 1.15 + 0.0008; }
+    /* the refresh clock: the compositor's last vblank (else the last present) and the period */
+    clock_type::time_point clock() {
+        clock_type::time_point vb;
+        double p;
+        if (pt::host::vblank(vb, p)) { per = p; return vb; }
+        per = 1.0 / std::max(30, pt::host::refresh_rate());
+        clock_type::time_point b, e;
+        pt::host::last_present(b, e);
+        return e;
+    }
+    static clock_type::time_point at_or_after(clock_type::time_point t, clock_type::time_point vb, double per) {
+        double n = std::ceil(seconds_d(t - vb).count() / per - 0.02);
+        return vb + dur(n * per);
+    }
+    /* the refresh a frame starting `now` will show at: `steps` refreshes after the last frame's
+     * if it can make that one (early: not time to start yet), else the first it can make */
+    clock_type::time_point plan(clock_type::time_point now, int steps, bool &early) {
+        clock_type::time_point vb = clock();
+        double est = estimate();
+        clock_type::time_point earliest = at_or_after(now + dur(est), vb, per);
+        early = false;
+        if (have_last && seconds_d(now - last_target).count() < 8 * per) {
+            clock_type::time_point cad = at_or_after(last_target + dur(steps * per - per / 2), vb, per);
+            if (cad >= earliest) {
+                early = now < cad - dur(est);
+                return cad;
+            }
+        }
+        return earliest;
+    }
+    int min_k() const {
+        static const int m = [] {
+            const char *v = pt::option("PT_MAX_FPS");
+            int fps = v ? atoi(v) : 0;
+            double per = 1.0 / std::max(30, pt::host::refresh_rate());
+            return fps > 0 ? std::max(1, (int)std::ceil(1.0 / fps / per - 0.05)) : 1;
+        }();
+        return m;
+    }
+    void begin(clock_type::time_point now, clock_type::time_point target) {
+        start = now;
+        pending = target;
+        drawing = true;
+    }
+    void end() {
+        if (!drawing) return;
+        drawing = false;
+        clock_type::time_point b, e;
+        pt::host::last_present(b, e);
+        if (b < start) return;   /* nothing was presented */
+        last_target = pending;
+        have_last = true;
+        double d = std::chrono::duration<double>(b - start).count();
+        if (d <= 0 || d > 0.2) return;
+        cost += 0.1 * (d - cost);
+        double est = estimate();
+        int want = std::max(min_k(), (int)std::ceil(est / per - 0.02));
+        if (want > k) k = std::min(want, 4);                                 /* slower: at once */
+        else if (want < k && est < (k - 1) * per * 0.85) k = std::max(want, min_k());   /* faster: with room */
+    }
+};
+Pacer g_pacer;
+
 uint32_t tvector(uint32_t code) {
     uint32_t tv = pt::sys_alloc(8);
     st32(tv, code);
@@ -286,12 +404,15 @@ Camera read_camera() {
     return c;
 }
 
-/* PT_FRAMELOG=file: one line per drawn frame (time shown, time presented, camera) for checking pacing */
+/* PT_FRAMELOG=file: one line per drawn frame for checking pacing: kind (R tick, B between), the
+ * moment blended for, the time after presenting, camera x y yaw pitch, tick, step phase, the
+ * pitch's vertical shift, the facing drawn (with its fraction), refreshes per frame, and the
+ * drawing time estimate in ms */
 void frame_log(char kind, clock_type::time_point at, const Camera &cam) {
     static FILE *f = [] { const char *p = getenv("PT_FRAMELOG"); return p ? fopen(p, "w") : nullptr; }();
     if (!f) return;
-    fprintf(f, "%c %.5f %.5f %d %d %d %d %u %d %d\n", kind, seconds(at), seconds(clock_type::now()), cam.x, cam.y, cam.yaw,
-            cam.pitch, g_cur.tick, cam.step, g_last_dtan);
+    fprintf(f, "%c %.5f %.5f %d %d %d %d %u %d %d %.3f %d %.2f\n", kind, seconds(at), seconds(clock_type::now()), cam.x,
+            cam.y, cam.yaw, cam.pitch, g_cur.tick, cam.step, g_last_dtan, cam.yawf, g_pacer.k, g_pacer.cost * 1000);
 }
 
 int lerp(int a, int b, double t) { return a + (int)((b - a) * t + (b >= a ? 0.5 : -0.5)); }
@@ -343,16 +464,25 @@ Camera blend(PPCContext *c, clock_type::time_point at) {
      * will reach once it runs the mouse movement already on its way. Keys blend. */
     float pend_yaw, pend_pitch;
     if (mouse_pending(pend_yaw, pend_pitch) && g_cur.yaw >= 0 && g_cur.yaw < 512) {
-        cam.yaw = (int16_t)((g_cur.yaw + (int)lroundf(pend_yaw)) & 511);
+        cam.yawf = g_cur.yaw + (double)pend_yaw;
         double p = (g_cur.pitch >= 256 ? g_cur.pitch - 512 : g_cur.pitch) + (double)pend_pitch;   /* 504: 8 below level */
         cam.pitchf = p < -kPitchLimit ? -kPitchLimit : p > kPitchLimit ? kPitchLimit : p;
     } else {
-        cam.yaw = (int16_t)lerp_angle(a.yaw, b.yaw, t);
+        if (a.yaw >= 0 && a.yaw < 512 && b.yaw >= 0 && b.yaw < 512) {
+            int d = b.yaw - a.yaw;
+            if (d > 256) d -= 512;
+            if (d < -256) d += 512;
+            cam.yawf = a.yaw + d * t;
+        } else {
+            cam.yawf = b.yaw;
+        }
         auto signed_pitch = [](int v) { return v >= 256 ? v - 512 : v; };   /* an angle: just below level is 511 */
         int pa = signed_pitch(a.pitch), pb = signed_pitch(b.pitch);
         cam.pitchf = pa + (pb - pa) * t;
     }
     cam.pitch = (int16_t)((int)std::floor(cam.pitchf) & 511);   /* the rest is drawn by pt_hook_update_view_data */
+    cam.yawf = std::fmod(std::fmod(cam.yawf, 512.0) + 512.0, 512.0);
+    cam.yaw = (int16_t)((int)std::floor(cam.yawf) & 511);        /* the rest by YawPatch */
     /* the renderer starts from the polygon holding the eye */
     if (cam.x == a.x && cam.y == a.y) {
         cam.poly = a.poly;
@@ -404,7 +534,23 @@ extern "C" int pt_hook_render_screen(PPCContext *c) {
     if (!enabled()) return 0;
 
     host::pump();   /* the newest mouse motion, as for the frames between */
-    Camera cam = blend(c, g_tick_time);
+    /* shown at the next refresh it can make (with vsync), so blend for that moment */
+    clock_type::time_point shown = g_tick_time, started = g_tick_time;
+    if (host::vsync_on()) {
+        /* a tick's frame keeps the cadence too: if its refresh is a while off, wait for it (at
+         * most k refreshes; the world has already run this tick) */
+        bool early;
+        shown = g_pacer.plan(g_tick_time, g_pacer.k, early);
+        if (early) {
+            auto go = shown - dur(g_pacer.estimate());
+            while (clock_type::now() + std::chrono::microseconds(1500) < go) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            while (clock_type::now() < go) std::this_thread::yield();
+            started = clock_type::now();
+            host::pump();   /* the mouse as of now */
+        }
+    }
+    g_pacer.begin(started, shown);
+    Camera cam = blend(c, shown);
     uint8_t saved[0x10];
     memcpy(saved, g_mem + p + kPlCamXY, sizeof saved);   /* +0x30 .. +0x3F */
     st16(p + kPlCamXY, (uint16_t)cam.x);
@@ -415,13 +561,17 @@ extern "C" int pt_hook_render_screen(PPCContext *c) {
     st16(p + kPlPitch, (uint16_t)cam.pitch);
     uint32_t step = ld32(p + kPlStepPhase);
     st32(p + kPlStepPhase, (uint32_t)cam.step);
-    blend_world(g_tick_time);
+    blend_world(shown);
     g_pitchf_active = true;
     g_pitchf = cam.pitchf;
+    g_yaw_frac = cam.yawf - std::floor(cam.yawf);
+    g_yaw_patch.apply(cam.yaw, g_yaw_frac);
     fn_010403D8_orig(c);
+    g_yaw_patch.restore();
     g_pitchf_active = false;
+    g_pacer.end();
     restore_world();
-    frame_log('R', g_tick_time, cam);
+    frame_log('R', shown, cam);
     memcpy(g_mem + p + kPlCamXY, saved, sizeof saved);
     st32(p + kPlStepPhase, step);
     return 1;
@@ -439,6 +589,14 @@ extern "C" int pt_hook_update_view_data(PPCContext *c) {
     fn_01031AD4_orig(c);
     g_last_dtan = (int32_t)ld32(v + kVwDtanPitch);
     if (!g_pitchf_active || v != ld32(kWorldViewPtr)) return 1;
+    if (g_yaw_frac >= 1e-4) {
+        /* the world-space cone (+8 left, +12 right: cosine, sine) from yaw -+ half_cone: the view
+         * is turned by the fraction toward yaw + 1, so the right side reaches a step further */
+        uint32_t cosine = ld32(kCosineTablePtr), sine = ld32(kSineTablePtr);
+        int r = ((int16_t)ld16(v + kVwYaw) + (int16_t)ld16(v + kVwHalfCone) + 1) & 511;
+        st16(v + 12, (uint16_t)ld32(cosine + 4 * r));
+        st16(v + 14, (uint16_t)ld32(sine + 4 * r));
+    }
     int n = (int)std::floor(g_pitchf);
     double f = g_pitchf - n;
     if (f < 1e-4 || (int16_t)ld16(v + kVwPitch) != (int16_t)(n & 511)) return 1;
@@ -457,6 +615,20 @@ extern "C" int pt_hook_update_view_data(PPCContext *c) {
     g_last_dtan = d;
     st16(v + kVwTopEdge, (uint16_t)(int16_t)(-(half_h + d)));
     st16(v + kVwBottomEdge, (uint16_t)(int16_t)(-half_h + d));
+    return 1;
+}
+
+/* _prelandscape_horizontal_polygon_lines(polygon, view, data, y0, x0_table, line_count): each
+ * line's first texture column (data + 20i) is (yaw << 16 or 17) + step * x0, shifted left 7 or
+ * 6: 1 << 23 per angle either way. Add the facing's fraction so the sky turns with the view. */
+extern "C" int pt_hook_prelandscape(PPCContext *c) {
+    using namespace pt;
+    uint32_t view = c->r[4], data = c->r[5];
+    int lines = (int32_t)c->r[8];
+    fn_0103E2D4_orig(c);
+    if (!g_pitchf_active || g_yaw_frac < 1e-4 || view != ld32(kWorldViewPtr)) return 1;
+    uint32_t add = (uint32_t)lround(g_yaw_frac * 8388608.0);
+    for (int i = 0; i < lines && i < 4096; i++) st32(data + 20 * i, ld32(data + 20 * i) + add);
     return 1;
 }
 
@@ -479,12 +651,21 @@ extern "C" int pt_hook_idle_game_state(PPCContext *c) {
     double since_tick = std::chrono::duration<double>(now - g_tick_time).count();
     double since_frame = std::chrono::duration<double>(now - g_last_frame).count();
     if (since_tick > 2 * kTick) return 0;            /* paused, in a menu, or between levels */
-    if (since_frame < frame_interval()) return 0;
+    clock_type::time_point shown = now;
+    if (host::vsync_on()) {
+        /* k refreshes after the last frame; start drawing only when it would just make it */
+        bool early;
+        shown = g_pacer.plan(now, g_pacer.k, early);
+        if (early) return 0;
+    } else if (since_frame < frame_interval()) {
+        return 0;
+    }
     uint32_t wv = ld32(kWorldViewPtr), bitmap = ld32(kBitmapPtr);
     if (!wv || !bitmap || ld16(kScreenMode + 2) != 0) return 0;   /* normal display only */
     ensure_tvectors();
     host::pump();   /* take in the newest mouse motion: frames wait on vsync, not on the event pump */
-    Camera cam = blend(c, now);
+    g_pacer.begin(now, shown);
+    Camera cam = blend(c, shown);
 
     /* draw with the blended camera, then put world_view back as render_screen left it */
     uint8_t saved[0x3C];
@@ -498,24 +679,29 @@ extern "C" int pt_hook_idle_game_state(PPCContext *c) {
     st32(wv + kVwTicks, 0);
     uint32_t p = ld32(kPlayerPtr), step = ld32(p + kPlStepPhase);
     st32(p + kPlStepPhase, (uint32_t)cam.step);   /* the weapon's bob */
-    blend_world(now);   /* platforms and objects */
+    blend_world(shown);   /* platforms and objects */
     g_pitchf_active = true;
     g_pitchf = cam.pitchf;
+    g_yaw_frac = cam.yawf - std::floor(cam.yawf);
+    g_yaw_patch.apply(cam.yaw, g_yaw_frac);
     uint32_t args[2] = {wv, bitmap};
     guest_call(c, g_tv_render_view, args, 2);
+    g_yaw_patch.restore();
     g_pitchf_active = false;
     guest_call(c, g_tv_update_screen, nullptr, 0);
+    g_pacer.end();
     restore_world();
-    frame_log('B', now, cam);
+    frame_log('B', shown, cam);
     memcpy(g_mem + wv, saved, sizeof saved);
     st32(p + kPlStepPhase, step);
     g_last_frame = now;
     static unsigned frames = 0;
     static uint32_t first_tick = g_cur.tick;
     if (++frames % 300 == 0)
-        logf(LOG_GFX, "interp: %u blended frames over %u ticks; camera %d,%d,%d poly %d yaw %d pitch %d; %zu world values\n",
+        logf(LOG_GFX, "interp: %u blended frames over %u ticks; camera %d,%d,%d poly %d yaw %d pitch %d; %zu world values; "
+             "%d refreshes a frame, drawing %.2f ms\n",
              frames, g_cur.tick - first_tick, g_cur.x, g_cur.y, g_cur.z, g_cur.poly, g_cur.yaw, g_cur.pitch,
-             g_blended_values);
+             g_blended_values, g_pacer.k, g_pacer.cost * 1000);
         if (frames % 300 == 0) g_blended_values = 0;
     return 0;
 }

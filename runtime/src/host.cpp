@@ -13,6 +13,7 @@
 #include <SDL.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <atomic>
 #include <cstdio>
@@ -36,14 +37,25 @@ static SDL_Texture *g_tex;
 /* Widescreen: the presented frame is g_w x 480, the 640x480 Mac screen in the middle and
  * g_ext columns either side. The sides show the game's widened 3D view (widescreen.cpp
  * fills g_side) while g_sides_live says so, and are black otherwise. */
-constexpr int kMaxW = 1000;   /* the renderer's scratch tables hold 1024 columns */
+constexpr int kMaxW = 1000;   /* the renderer's tables held 1024 columns (4096 since the hires patches; wider untested) */
 static int g_w = 640, g_ext = 0;
 static uint32_t g_rgba[kMaxW * 480];
 static uint32_t g_side[480][2 * (kMaxW - 640) / 2 + 2];
 static bool (*g_sides_live)() = nullptr;
+/* High resolution (widescreen.cpp): the 3D view at full size, presented instead of the
+ * g_w x 480 frame while g_hires_live says so. */
+static std::vector<uint8_t> g_hires_raw;   /* guest pixels */
+static std::vector<uint32_t> g_hires;      /* as presented */
+static int g_hires_w = 0, g_hires_h = 0, g_hires_depth = 0;
+static SDL_Texture *g_hires_tex = nullptr;
+static int g_hires_tex_w = 0, g_hires_tex_h = 0;
+static bool (*g_hires_live)() = nullptr;
+/* the last present: just before SDL_RenderPresent, and when it returned (with vsync, a refresh) */
+static std::chrono::steady_clock::time_point g_present_begin, g_present_end;
 static uint64_t g_last_present = 0;
 static std::deque<MacEvent> g_events;
 static uint8_t g_keys[16];
+static uint8_t g_script_keys[16];   /* held by PT_INPUT (hold/release) */
 static int g_mx = 320, g_my = 240;
 static std::atomic<int> g_dx_acc{0}, g_dy_acc{0};   /* raw motion since take_mouse_delta (mouse look) */
 static double g_mouse_div = 1.0;                     /* raw counts per guest pixel (init) */
@@ -311,6 +323,11 @@ static int key_code_named(const std::string &k) {
         static const int kp[10] = {0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5B, 0x5C};
         return kp[k[2] - '0'] << 8 | k[2];
     }
+    if (k.size() >= 2 && k[0] == 'f' && isdigit((unsigned char)k[1])) {   /* f1..f12 */
+        static const int fk[12] = {0x7A, 0x78, 0x63, 0x76, 0x60, 0x61, 0x62, 0x64, 0x65, 0x6D, 0x67, 0x6F};
+        int n = atoi(k.c_str() + 1);
+        if (n >= 1 && n <= 12) return fk[n - 1] << 8 | 0x10;
+    }
     if (k == "shift") return 0x38 << 8;
     if (k == "ctrl") return 0x3B << 8;
     if (k == "option") return 0x3A << 8;
@@ -346,6 +363,8 @@ static void run_script() {
                 int code = kc >> 8;
                 if (x.op == "hold") g_keys[code >> 3] |= (uint8_t)(1 << (code & 7));
                 else g_keys[code >> 3] &= (uint8_t)~(1 << (code & 7));
+                if (x.op == "hold") g_script_keys[code >> 3] |= (uint8_t)(1 << (code & 7));
+                else g_script_keys[code >> 3] &= (uint8_t)~(1 << (code & 7));
             }
         }
         if (x.op == "key") {
@@ -404,7 +423,11 @@ void pump() {
             break;
         }
         case SDL_WINDOWEVENT:
-            if (ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) { memset(g_keys, 0, sizeof g_keys); g_button = false; set_relative(false); }
+            if (ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+                memcpy(g_keys, g_script_keys, sizeof g_keys);   /* PT_INPUT's held keys stay held */
+                g_button = false;
+                set_relative(false);
+            }
             break;
         case SDL_AUDIODEVICEREMOVED:
             if (!ev.adevice.iscapture && ev.adevice.which == g_audio) {
@@ -474,6 +497,54 @@ void set_fullscreen(bool on) {
 int side_width() { return g_ext; }
 uint32_t *side_row(int y) { return y >= 0 && y < 480 ? g_side[y] : nullptr; }
 void set_sides_live(bool (*fn)()) { g_sides_live = fn; }
+uint8_t *hires_frame(int w, int h, int depth) {
+    if (w != g_hires_w || h != g_hires_h || depth != g_hires_depth) {
+        g_hires_raw.assign((size_t)w * h * (depth / 8), 0);
+        g_hires.assign((size_t)w * h, 0xFF000000u);
+        g_hires_w = w;
+        g_hires_h = h;
+        g_hires_depth = depth;
+    }
+    return g_hires_raw.data();
+}
+
+/* the high-resolution frame through the display's colours now: the screen's colour table at 8
+ * bits, the driver's ramps (fades) at 16 and 32 */
+static void convert_hires() {
+    const uint8_t *p = g_hires_raw.data();
+    uint32_t *o = g_hires.data();
+    size_t n = (size_t)g_hires_w * g_hires_h;
+    if (g_hires_depth == 8) {
+        auto pal = qd::screen_palette();
+        uint32_t lut[256];
+        for (int i = 0; i < 256; i++) {
+            qd::RGB c = i < (int)pal.size() ? pal[i] : qd::RGB{0, 0, 0};
+            lut[i] = 0xFF000000u | (uint32_t)(c.r >> 8) << 16 | (uint32_t)(c.g >> 8) << 8 | (c.b >> 8);
+        }
+        for (size_t i = 0; i < n; i++) o[i] = lut[p[i]];
+        return;
+    }
+    uint8_t mr[256], mg[256], mb[256];
+    qd::direct_maps(g_hires_depth, mr, mg, mb);
+    if (g_hires_depth == 16) {
+        static uint32_t lut[32768];
+        for (uint32_t v = 0; v < 32768; v++)
+            lut[v] = 0xFF000000u | (uint32_t)mr[(v >> 10) & 31] << 16 | (uint32_t)mg[(v >> 5) & 31] << 8 | mb[v & 31];
+        for (size_t i = 0; i < n; i++) o[i] = lut[((uint32_t)p[2 * i] << 8 | p[2 * i + 1]) & 0x7FFF];
+        return;
+    }
+    for (size_t i = 0; i < n; i++, p += 4)
+        o[i] = 0xFF000000u | (uint32_t)mr[p[1]] << 16 | (uint32_t)mg[p[2]] << 8 | mb[p[3]];
+}
+void set_hires_live(bool (*fn)()) { g_hires_live = fn; }
+void last_present(std::chrono::steady_clock::time_point &begin, std::chrono::steady_clock::time_point &end) {
+    begin = g_present_begin;
+    end = g_present_end;
+}
+bool vsync_on() {
+    const char *vs = option("PT_VSYNC");
+    return !(vs && *vs == '0');
+}
 int refresh_rate() {
     SDL_DisplayMode m;
     int d = g_win ? SDL_GetWindowDisplayIndex(g_win) : 0;
@@ -572,9 +643,13 @@ void present(bool force) {
     static uint64_t last_shot = 0;
     static int shot_n = 0;
     static const uint64_t shot_ms = getenv("PT_SHOT_MS") ? (uint64_t)atoi(getenv("PT_SHOT_MS")) : 2000;
+    const bool hi = g_hires_live && g_hires_w > 0 && g_hires_live();
+    if (hi) convert_hires();
     if (shot_dir && now - last_shot >= shot_ms) {
         last_shot = now;
-        SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormatFrom(g_rgba, g_w, 480, 32, g_w * 4, SDL_PIXELFORMAT_ARGB8888);
+        SDL_Surface *surf = hi ? SDL_CreateRGBSurfaceWithFormatFrom(g_hires.data(), g_hires_w, g_hires_h, 32, g_hires_w * 4,
+                                                                    SDL_PIXELFORMAT_ARGB8888)
+                               : SDL_CreateRGBSurfaceWithFormatFrom(g_rgba, g_w, 480, 32, g_w * 4, SDL_PIXELFORMAT_ARGB8888);
         char path[512];
         snprintf(path, sizeof path, "%s/shot_%03d.bmp", shot_dir, shot_n++);
         SDL_SaveBMP(surf, path);
@@ -594,10 +669,23 @@ void present(bool force) {
         }
     }
     if (run_secs && now > (uint64_t)atoi(run_secs) * 1000) { SDL_Quit(); std::_Exit(0); }
-    SDL_UpdateTexture(g_tex, nullptr, g_rgba, g_w * 4);
     SDL_RenderClear(g_ren);
-    SDL_RenderCopy(g_ren, g_tex, nullptr, nullptr);
+    if (hi) {
+        if (!g_hires_tex || g_hires_tex_w != g_hires_w || g_hires_tex_h != g_hires_h) {
+            if (g_hires_tex) SDL_DestroyTexture(g_hires_tex);
+            g_hires_tex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, g_hires_w, g_hires_h);
+            g_hires_tex_w = g_hires_w;
+            g_hires_tex_h = g_hires_h;
+        }
+        SDL_UpdateTexture(g_hires_tex, nullptr, g_hires.data(), g_hires_w * 4);
+        SDL_RenderCopy(g_ren, g_hires_tex, nullptr, nullptr);   /* the logical g_w x 480, at the window's pixels */
+    } else {
+        SDL_UpdateTexture(g_tex, nullptr, g_rgba, g_w * 4);
+        SDL_RenderCopy(g_ren, g_tex, nullptr, nullptr);
+    }
+    g_present_begin = std::chrono::steady_clock::now();
     SDL_RenderPresent(g_ren);
+    g_present_end = std::chrono::steady_clock::now();
 }
 
 }  // namespace pt::host

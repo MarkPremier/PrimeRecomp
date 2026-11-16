@@ -57,6 +57,15 @@ PATCHES = {
         # bits 9..13): the value is centred by subtracting 32 instead of 16, so every pitch came
         # out negative. Nothing in the original sets bit 8; the native mouse hook does.
         (0x01025CF4, 0x3803FFE0, 0x3803FFF0, 'physics_update: absolute pitch centred on 16 (was 32)'),
+        # Room for a 3D view bigger than 640x480 (the hires option, widescreen.cpp). The texture
+        # mapper's scratch tables hold one entry per screen column (walls) or row (floors) and
+        # the precalculation table 34 bytes per line, for 1024 lines; the world bitmap's
+        # header holds 480 row pointers. Each now has room for 4096; nothing else changes.
+        (0x0103A258, 0x38600800, 0x38602000, 'allocate_texture_tables: scratch_table0 4096 entries (was 1024)'),
+        (0x0103A268, 0x38600800, 0x38602000, 'allocate_texture_tables: scratch_table1 4096 entries (was 1024)'),
+        (0x0103A278, 0x3C600001, 0x3C600002, 'allocate_texture_tables: precalculation table 34 x 4096 (high half)'),
+        (0x0103A27C, 0x38638800, 0x38632000, 'allocate_texture_tables: precalculation table 34 x 4096 (low half)'),
+        (0x0103F3F8, 0x3860079E, 0x3860401E, 'initialize_screen: world bitmap header, 4096 row pointers (was 480)'),
     ],
 }
 
@@ -75,6 +84,7 @@ HOOKS = {
         0x01026AB0: 'pt_hook_place_revisited',   # hooks.cpp: levels past the 28 revisit records
         0x01009E08: 'pt_hook_save_level',
         0x01031AD4: 'pt_hook_update_view_data',  # interp.cpp: pitch between whole angles
+        0x0103E2D4: 'pt_hook_prelandscape',      # interp.cpp: the sky turns between whole angles
     },
 }
 

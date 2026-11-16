@@ -25,7 +25,7 @@ find_package(SDL2 REQUIRED CONFIG)
 
 add_executable(primetarget ${PT_RUNTIME_SOURCES} ${PT_GENERATED_SOURCES})
 target_include_directories(primetarget PRIVATE runtime/include generated)
-target_link_libraries(primetarget PRIVATE SDL2::SDL2 winmm)
+target_link_libraries(primetarget PRIVATE SDL2::SDL2 winmm dwmapi)
 add_custom_command(TARGET primetarget POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:SDL2::SDL2> $<TARGET_FILE_DIR:primetarget>)
 

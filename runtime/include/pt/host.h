@@ -1,6 +1,7 @@
 /* Host platform layer (SDL2): window, presentation, input, audio device. */
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <deque>
 
@@ -27,6 +28,11 @@ bool mouse_down();
 void take_mouse_delta(int &dx, int &dy);   /* mouse motion (guest pixels) since the last call */
 void peek_mouse_delta(int &dx, int &dy);   /* the same, without taking it */
 int refresh_rate();                        /* the window's display, in Hz */
+/* the last present: just before SDL_RenderPresent and when it returned (with vsync, at a refresh) */
+void last_present(std::chrono::steady_clock::time_point &begin, std::chrono::steady_clock::time_point &end);
+bool vsync_on();
+/* the compositor's last vblank and the refresh period (vblank.cpp); false if not available */
+bool vblank(std::chrono::steady_clock::time_point &last, double &period);
 /* widescreen: the presented frame has side_width() extra columns each side of the Mac screen;
  * side_row(y) holds them (left side_width() pixels, then the right ones, 0xAARRGGBB), shown
  * while the function given to set_sides_live returns true */
@@ -34,6 +40,11 @@ int side_width();
 void reconfigure_width();   /* re-read the widescreen option and resize to it */
 uint32_t *side_row(int y);
 void set_sides_live(bool (*fn)());
+/* high resolution: hires_frame(w, h, depth) is a w x h buffer of the full-size 3D view's guest
+ * pixels (8, 16 or 32 bits, rows packed), converted through the display's colours as it is
+ * presented (so fades show) in place of the Mac screen while set_hires_live's function says so */
+uint8_t *hires_frame(int w, int h, int depth);
+void set_hires_live(bool (*fn)());
 bool is_fullscreen();                      /* the window covers its monitor */
 void set_fullscreen(bool on);
 uint16_t modifiers();

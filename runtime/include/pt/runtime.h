@@ -32,6 +32,8 @@ void set_interpolation(bool on);
 void init_widescreen();   /* widescreen.cpp: the host shows the widened 3D view beside the screen */
 bool widescreen_enabled();
 void set_widescreen(bool on);
+int hires_lines();              /* the hires option: the 3D view's height in Full Screen, 0 = the original 480 */
+void set_hires_lines(int lines);   /* saves it and rebuilds the view if a game is in progress */
 
 /* ---------- guest memory ---------- */
 void mem_init();

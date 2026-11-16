@@ -85,6 +85,53 @@ static int ctl_proc(uint32_t ch) { return (int)(ld32(ld32(ch) + cr::contrlDefPro
 static bool is_popup(uint32_t ch) { return (ctl_proc(ch) & ~15) == 1008; }
 static int16_t v16(uint32_t a) { return (int16_t)ld16(a); }
 
+/* ---------- Window Size: the port's high-resolution Full Screen sizes ----------
+ * MENU 2001 (the Graphics pane's Window Size pop-up: Full Screen, 100%, 75%, 50%, the game's
+ * size + 1) gains items after the game's four. The game only ever sees item 1 for them: its
+ * GetControlValue reads 1, and its SetControlValue(1) shows the chosen one. The choice (the
+ * hires option) is applied on OK and dropped on Cancel, like the checkboxes. */
+constexpr int16_t kSizeMenu = 2001;
+constexpr int kGameSizes = 4;
+static const struct { const char *label; int lines; } kHiresSizes[] = {
+    {"Full Screen 1080p", 1080},
+    {"Full Screen 1440p", 1440},
+};
+constexpr int kHiresCount = (int)(sizeof kHiresSizes / sizeof kHiresSizes[0]);
+static uint32_t g_size_dlg = 0;   /* the dialog showing the pop-up */
+static int g_size_pending = -1;   /* lines chosen there, not yet applied (-1: none) */
+
+void patch_menu(int16_t id, std::vector<uint8_t> &d) {
+    if (id != kSizeMenu || d.size() < 16) return;
+    size_t p = 14 + 1 + d[14];          /* past the title */
+    int n = 0;
+    while (p < d.size() && d[p]) { p += 1 + d[p] + 4; n++; }
+    if (n != kGameSizes || p >= d.size()) return;
+    std::vector<uint8_t> add;
+    for (auto &s : kHiresSizes) {
+        size_t len = strlen(s.label);
+        add.push_back((uint8_t)len);
+        add.insert(add.end(), s.label, s.label + len);
+        for (int i = 0; i < 4; i++) add.push_back(0);   /* no icon, key, mark or style */
+    }
+    d.insert(d.begin() + (long)p, add.begin(), add.end());
+    uint32_t f = (uint32_t)d[10] << 24 | d[11] << 16 | d[12] << 8 | d[13];
+    for (int i = 0; i < kHiresCount; i++) f |= 1u << (kGameSizes + 1 + i);   /* enabled */
+    d[10] = (uint8_t)(f >> 24); d[11] = (uint8_t)(f >> 16); d[12] = (uint8_t)(f >> 8); d[13] = (uint8_t)f;
+}
+
+static bool is_size_popup(uint32_t ch) {
+    if (!ch || !is_popup(ch)) return false;
+    uint32_t priv = ld32(ld32(ch) + cr::contrlData);
+    return priv && ld32(priv) && v16(ld32(priv) + 4) == kSizeMenu;
+}
+static int lines_of_item(int item) {
+    return item > kGameSizes && item <= kGameSizes + kHiresCount ? kHiresSizes[item - kGameSizes - 1].lines : 0;
+}
+static int item_of_lines(int lines) {
+    for (int i = 0; i < kHiresCount; i++) if (kHiresSizes[i].lines == lines) return kGameSizes + 1 + i;
+    return 1;
+}
+
 /* ---------- drawing helpers (current port = owner window) ---------- */
 static void set_fg(uint32_t p, RGB c) { st16(p + port::rgbFgColor, c.r); st16(p + port::rgbFgColor + 2, c.g); st16(p + port::rgbFgColor + 4, c.b); }
 static RGB get_bg(uint32_t p) { return port_bk(p); }
@@ -258,6 +305,10 @@ static int track_control(uint32_t ch, int v, int h) {
         int gtop = r.top - s.bounds.top, gleft = r.left + title_w + 2 - s.bounds.left;
         int sel = menu::popup_select(mh, gtop, gleft, v16(c + cr::contrlValue));
         if (sel) { st16(c + cr::contrlValue, (uint16_t)sel); draw_control(ch); }
+        if (sel && is_size_popup(ch)) {
+            g_size_dlg = win;
+            g_size_pending = lines_of_item(sel);   /* a game size: the original 480 */
+        }
         return sel ? 1 : 0;
     }
     int proc = ctl_proc(ch);
@@ -627,6 +678,7 @@ HLE(GetNewDialog) {
 HLE(DisposeDialog) {
     for (auto &k : g_checks)
         if (ARG(0) == k.dlg) { k.dlg = 0; k.item = 0; k.pending = -1; }
+    if (ARG(0) == g_size_dlg) { g_size_dlg = 0; g_size_pending = -1; }
     dispose_dialog(ARG(0));
 }
 HLE(DrawDialog) { draw_dialog(ARG(0)); }
@@ -639,6 +691,10 @@ HLE(ModalDialog) {
             if (hit == 1 && k.pending >= 0 && (k.pending != 0) != k.get()) k.set(k.pending != 0);
             k.pending = -1;
         }
+    if (d == g_size_dlg && (hit == 1 || hit == 2)) {
+        if (hit == 1 && g_size_pending >= 0) set_hires_lines(g_size_pending);
+        g_size_pending = -1;
+    }
     st16(ARG(1), (uint16_t)hit);
 }
 
@@ -774,6 +830,10 @@ HLE(AppendDITL) {
             std::vector<uint8_t> cn;
             if (res::get_bytes('CNTL', id, cn) && cn.size() >= 22) {
                 auto b16 = [&](int o) { return (int16_t)(cn[o] << 8 | cn[o + 1]); };
+                if (b16(14) == kSizeMenu) {   /* room for "Full Screen 1440p": as wide as Number of Colors */
+                    r.right += 25;
+                    write_rect(after[i].addr + 4, r);
+                }
                 h = new_control(d, r, std::string((const char *)&cn[23], cn[22]), b16(10) != 0, b16(8), b16(14), b16(12), b16(16), 0);
             }
         } else if (type == 32) h = res::get_handle('ICON', (int16_t)(ld8(after[i].data) << 8 | ld8(after[i].data + 1)));
@@ -826,10 +886,19 @@ HLE(NewControl) {
 }
 HLE(DisposeControl) { dispose_control(ARG(0)); }
 HLE(KillControls) { while (ld32(ARG(0) + kWinControlList)) dispose_control(ld32(ARG(0) + kWinControlList)); }
-HLE(GetControlValue) { RET((int32_t)v16(ld32(ARG(0)) + cr::contrlValue)); }
+HLE(GetControlValue) {
+    int v = v16(ld32(ARG(0)) + cr::contrlValue);
+    if (is_size_popup(ARG(0)) && lines_of_item(v)) v = 1;   /* the port's sizes are Full Screen to the game */
+    RET((int32_t)v);
+}
 HLE(SetControlValue) {
     uint32_t c0 = ld32(ARG(0));
     int v = (int16_t)ARG(1), mn = v16(c0 + cr::contrlMin), mx = v16(c0 + cr::contrlMax);
+    if (v == 1 && is_size_popup(ARG(0))) {   /* Full Screen: show the high-resolution one in use */
+        uint32_t d = ld32(c0 + cr::contrlOwner);
+        if (g_size_dlg != d) { g_size_dlg = d; g_size_pending = -1; }
+        v = item_of_lines(g_size_pending >= 0 ? g_size_pending : hires_lines());
+    }
     if (v < mn) v = mn;
     if (v > mx) v = mx;
     st16(c0 + cr::contrlValue, (uint16_t)v);

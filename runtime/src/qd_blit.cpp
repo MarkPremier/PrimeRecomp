@@ -67,6 +67,32 @@ void copy_bits(const Surface &src, const Surface &dst, Rect sr, Rect dr, int mod
         return;
     }
 
+    /* fast path: plain scaled copy, same pixel format (the high-resolution world shrunk onto the
+     * Mac screen): nearest pixel, as the general path picks it */
+    if (m == 0 && scaled && !transparent && src.depth >= 8 && same_colors(src, dst)) {
+        int bpp = src.depth / 8;
+        std::vector<int> col((size_t)(c.right - c.left));
+        for (int x = c.left; x < c.right; x++)
+            col[x - c.left] = sr.left + (int)((int64_t)(x - dr.left) * sw / dw) - src.bounds.left;
+        for (int y = c.top; y < c.bottom; y++) {
+            int sy = sr.top + (int)((int64_t)(y - dr.top) * sh / dh) - src.bounds.top;
+            if (sy < 0 || sy >= src.bounds.bottom - src.bounds.top) continue;
+            const uint8_t *srow = g_mem + src.base + (uint32_t)sy * src.row_bytes;
+            int py = y - dst.bounds.top;
+            uint8_t *drow = g_mem + dst.base + (uint32_t)py * dst.row_bytes;
+            const uint8_t *own = dst.occl && py >= 0 && py < 480 ? dst.occl + py * 640 : nullptr;
+            for (int x = c.left; x < c.right; x++) {
+                int sx = col[x - c.left], px = x - dst.bounds.left;
+                if (sx < 0 || sx >= src.bounds.right - src.bounds.left) continue;
+                if (own && px >= 0 && px < 640 && own[px] != dst.owner) continue;
+                if (bpp == 4) memcpy(drow + px * 4, srow + sx * 4, 4);
+                else if (bpp == 2) memcpy(drow + px * 2, srow + sx * 2, 2);
+                else drow[px] = srow[sx];
+            }
+        }
+        return;
+    }
+
     /* general path: source pixel -> RGB -> destination pixel */
     std::vector<uint32_t> lut;
     bool src_indexed = src.depth <= 8;
