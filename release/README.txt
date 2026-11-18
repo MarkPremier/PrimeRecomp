@@ -102,6 +102,14 @@ Screen" and "100%" at high resolution; the widest is about 2:1, so an
 ultrawide monitor keeps narrow bars. Preferences > Graphics > Widescreen
 switches between this and the original 4:3 (widescreen in primetarget.ini).
 
+High resolution (experimental): Preferences > Graphics > Window Size has
+"Full Screen 1080p" and "Full Screen 1440p" after the original sizes. They
+draw the 3D view at that many lines, as wide as the view's shape (2560 or so
+across at 1440 on a 16:9 monitor), instead of the original 480 lines scaled
+up. Detail must be "High Resolution". Everything else (menus, dialogs, the
+picture's framing and field of view) is the same as plain Full Screen; it
+costs frame rate, since the game draws every pixel itself.
+
 
 OPTIONS
 -------
@@ -120,6 +128,8 @@ of a line to change that option:
     vsync = 0               don't wait for the display's refresh (may tear)
     widescreen = 0          the original 4:3 view (or a shape, e.g. 16:9;
                             default: the monitor's)
+    hires = 1080            the high-resolution 3D view (also Window Size
+                            "Full Screen 1080p" / "1440p"; 0: the original)
     scale = 3               a bigger window (480 lines times this; default 2)
     mouse_grab = 0          let the pointer leave the window
     fullscreen = 1          start filling the monitor
